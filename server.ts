@@ -1,0 +1,1363 @@
+import express from "express";
+import path from "path";
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
+import pg from "pg";
+
+const { Pool } = pg;
+
+// Initialize Express App
+const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+
+// Security Middlewares: Global Security Headers
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https:;");
+  next();
+});
+
+app.use(express.json({ limit: "2mb" }));
+
+// Serve Local Avatars Static Directory
+const publicAvatarsPath = path.join(process.cwd(), "public", "avatars");
+app.use("/avatars", express.static(publicAvatarsPath));
+
+// Initialize PostgreSQL Connection Pool
+const pool = new Pool({
+  host: process.env.POSTGRES_HOST || "localhost",
+  port: Number(process.env.POSTGRES_PORT) || 5432,
+  database: process.env.POSTGRES_DB || "supporthub_db",
+  user: process.env.POSTGRES_USER || "supporthub_user",
+  password: process.env.POSTGRES_PASSWORD || "SupporthubSecure2026!Pass",
+});
+
+// Helper for parameterized SQL queries
+async function query(text: string, params?: any[]) {
+  return await pool.query(text, params);
+}
+
+// Global active session state (simulação de sessão)
+let activeUserId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+
+// Helper: Sanitize User (Remove password / password_hash)
+function sanitizeUser(u: any) {
+  if (!u) return null;
+  const { password, password_hash, ...rest } = u;
+  return rest;
+}
+
+// Security: Email Format Validation
+function isValidEmail(email: string): boolean {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+// Password Policy Verification (OWASP Standards: Min 8 chars + Special Char)
+function validatePasswordPolicy(password: string): { isValid: boolean; error?: string } {
+  if (!password || password.length < 8) {
+    return { isValid: false, error: "A senha deve conter no mínimo 8 caracteres." };
+  }
+  const specialCharRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/;
+  if (!specialCharRegex.test(password)) {
+    return { isValid: false, error: "A senha deve conter pelo menos 1 caractere especial (ex: !@#$%^&*)." };
+  }
+  return { isValid: true };
+}
+
+// Simple Rate Limiting for Login Attempts (Anti Brute-Force)
+const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
+function checkRateLimit(ipOrEmail: string): boolean {
+  const now = Date.now();
+  const attempt = loginAttempts.get(ipOrEmail);
+  if (!attempt) return true;
+  if (now - attempt.lastAttempt > 15 * 60 * 1000) {
+    loginAttempts.delete(ipOrEmail);
+    return true;
+  }
+  return attempt.count < 5;
+}
+function recordFailedAttempt(ipOrEmail: string) {
+  const now = Date.now();
+  const attempt = loginAttempts.get(ipOrEmail) || { count: 0, lastAttempt: now };
+  attempt.count += 1;
+  attempt.lastAttempt = now;
+  loginAttempts.set(ipOrEmail, attempt);
+}
+function resetAttempt(ipOrEmail: string) {
+  loginAttempts.delete(ipOrEmail);
+}
+
+// Audit Logger Function in PostgreSQL
+async function recordAuditLog({
+  userId,
+  userName,
+  userRole,
+  module,
+  action,
+  description,
+  details
+}: {
+  userId?: string;
+  userName?: string;
+  userRole?: string;
+  module: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'LOGOUT';
+  description: string;
+  details?: Record<string, any>;
+}) {
+  try {
+    let currentUserId = userId || activeUserId;
+    let name = userName;
+    let role = userRole || 'AGENT';
+
+    if (currentUserId) {
+      const uRes = await query("SELECT name, role FROM users WHERE id::text = $1", [currentUserId]);
+      if (uRes.rows.length > 0) {
+        name = uRes.rows[0].name;
+        role = uRes.rows[0].role;
+      }
+    }
+
+    await query(
+      `INSERT INTO historico_auditoria (user_id, user_name, user_role, module, action, description, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        currentUserId || null,
+        name || "Sistema",
+        role,
+        module,
+        action,
+        description,
+        JSON.stringify(details || {})
+      ]
+    );
+  } catch (err) {
+    console.error("Erro ao registrar log de auditoria no PostgreSQL:", err);
+  }
+}
+
+// Initialize Gemini Client lazily if key is available
+let aiClient: GoogleGenAI | null = null;
+function getGeminiClient(): GoogleGenAI | null {
+  if (!aiClient && process.env.GEMINI_API_KEY) {
+    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  }
+  return aiClient;
+}
+
+// Helper to determine local SVG avatar
+function getLocalAvatarForRole(role: string): string {
+  if (role === "ADMIN") return "/avatars/admin.svg";
+  if (role === "TRAINEE") return "/avatars/trainee.svg";
+  return "/avatars/agent.svg";
+}
+
+// =============================================================================
+// DATABASE INITIALIZATION & SCHEMA MIGRATION
+// =============================================================================
+async function initDatabase() {
+  try {
+    console.log("🐘 Conectando ao PostgreSQL...");
+    
+    // Enable UUID extension & create enum types if not exists
+    await query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
+    await query(`
+      DO $$ BEGIN
+        CREATE TYPE user_role_enum AS ENUM ('ADMIN', 'AGENT', 'TRAINEE');
+      EXCEPTION
+        WHEN duplicate_object THEN null;
+      END $$;
+    `);
+
+    // 1. Users Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          name VARCHAR(120) NOT NULL,
+          email VARCHAR(150) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          role user_role_enum NOT NULL DEFAULT 'AGENT',
+          department VARCHAR(100) DEFAULT 'Suporte N1',
+          active BOOLEAN NOT NULL DEFAULT TRUE,
+          avatar_url TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 2. Categories Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS categories (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          name VARCHAR(100) UNIQUE NOT NULL,
+          slug VARCHAR(120) UNIQUE NOT NULL,
+          color VARCHAR(20) DEFAULT '#3B82F6',
+          icon VARCHAR(50) DEFAULT 'Folder',
+          description TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 3. Canned Responses Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS canned_responses (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          title VARCHAR(150) NOT NULL,
+          shortcut VARCHAR(50),
+          category_id UUID REFERENCES categories(id) ON DELETE CASCADE,
+          body TEXT NOT NULL,
+          variables JSONB DEFAULT '[]'::jsonb,
+          usage_count INT DEFAULT 0,
+          is_favorite BOOLEAN DEFAULT FALSE,
+          created_by VARCHAR(120),
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 4. Knowledge Articles Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS knowledge_articles (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          title VARCHAR(200) NOT NULL,
+          slug VARCHAR(220) UNIQUE NOT NULL,
+          category_id UUID REFERENCES categories(id) ON DELETE CASCADE,
+          content_md TEXT NOT NULL,
+          tags JSONB DEFAULT '[]'::jsonb,
+          views_count INT DEFAULT 0,
+          helpful_count INT DEFAULT 0,
+          author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          author_name VARCHAR(120),
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 5. Cidades Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS cidades (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          name VARCHAR(150) NOT NULL,
+          uf VARCHAR(2) NOT NULL,
+          code_ibge VARCHAR(20),
+          notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 6. Sistemas Links Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS sistemas_links (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          city_id UUID NOT NULL REFERENCES cidades(id) ON DELETE CASCADE,
+          name VARCHAR(150) NOT NULL,
+          url TEXT NOT NULL,
+          category VARCHAR(80) DEFAULT 'Sistema Tributário',
+          access_notes VARCHAR(255) DEFAULT 'Acesso direto via navegador',
+          is_active BOOLEAN DEFAULT TRUE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 7. Audit Trail Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS historico_auditoria (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          user_name VARCHAR(120) NOT NULL,
+          user_role user_role_enum NOT NULL DEFAULT 'AGENT',
+          module VARCHAR(80) NOT NULL,
+          action VARCHAR(20) NOT NULL,
+          description TEXT NOT NULL,
+          details JSONB DEFAULT '{}'::jsonb,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 8. User Scratchpads Table
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_scratchpads (
+          user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          content TEXT DEFAULT '',
+          last_saved_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // Migração de Segurança: Atualizar senhas sem hash e avatares externos
+    const adminHash = await bcrypt.hash("Admin@123", 10);
+    const suporteHash = await bcrypt.hash("Suporte@123", 10);
+
+    // Substituir avatares externos por locais e aplicar Hashing Bcrypt nas contas padrão
+    await query(`
+      UPDATE users 
+      SET avatar_url = '/avatars/admin.svg',
+          password_hash = $1 
+      WHERE email = 'admin@empresa.com.br' AND (password_hash = 'Admin@123' OR password_hash NOT LIKE '$2%');
+    `, [adminHash]);
+
+    await query(`
+      UPDATE users 
+      SET avatar_url = '/avatars/agent.svg',
+          password_hash = $1 
+      WHERE email = 'mariana@empresa.com.br' AND (password_hash = 'Suporte@123' OR password_hash NOT LIKE '$2%');
+    `, [suporteHash]);
+
+    await query(`
+      UPDATE users 
+      SET avatar_url = '/avatars/trainee.svg',
+          password_hash = $1 
+      WHERE email = 'lucas@empresa.com.br' AND (password_hash = 'Suporte@123' OR password_hash NOT LIKE '$2%');
+    `, [suporteHash]);
+
+    // Atualizar avatares externos de qualquer outro usuário cadastrado para avatares locais
+    await query(`
+      UPDATE users
+      SET avatar_url = CASE 
+        WHEN role = 'ADMIN' THEN '/avatars/admin.svg'
+        WHEN role = 'TRAINEE' THEN '/avatars/trainee.svg'
+        ELSE '/avatars/agent.svg'
+      END
+      WHERE avatar_url LIKE 'http%' OR avatar_url IS NULL;
+    `);
+
+    // SEED INITIAL DATA IF USERS TABLE IS EMPTY
+    const userCountRes = await query("SELECT COUNT(*) FROM users");
+    if (parseInt(userCountRes.rows[0].count, 10) === 0) {
+      console.log("🌱 Populando banco de dados com dados iniciais e Hashes Bcrypt...");
+      
+      // Users com senhas Bcrypt
+      await query(`
+        INSERT INTO users (id, name, email, password_hash, role, department, active, avatar_url) VALUES
+        ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)', 'admin@empresa.com.br', $1, 'ADMIN', 'Coordenação de TI', TRUE, '/avatars/admin.svg'),
+        ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Mariana Costa (Agente)', 'mariana@empresa.com.br', $2, 'AGENT', 'Suporte N2', TRUE, '/avatars/agent.svg'),
+        ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'Lucas Oliveira (Trainee)', 'lucas@empresa.com.br', $3, 'TRAINEE', 'Suporte N1 (Estágio)', TRUE, '/avatars/trainee.svg')
+        ON CONFLICT DO NOTHING;
+      `, [adminHash, suporteHash, suporteHash]);
+
+      // Categories
+      await query(`
+        INSERT INTO categories (id, name, slug, color, icon, description) VALUES
+        ('11111111-1111-1111-1111-111111111111', 'Autenticação & Acesso', 'autenticacao-acesso', '#EC4899', 'KeyRound', 'Problemas com senhas, 2FA, permissões e login.'),
+        ('22222222-2222-2222-2222-222222222222', 'Financeiro & Faturamento', 'financeiro-faturamento', '#10B981', 'Receipt', 'Segunda via de boletos, troca de cartão e reembolsos.'),
+        ('33333333-3333-3333-3333-333333333333', 'Infraestrutura & API', 'infraestrutura-api', '#8B5CF6', 'Server', 'Instabilidade no servidor, limites de API e webhooks.'),
+        ('44444444-4444-4444-4444-444444444444', 'Procedimentos Padrão (SOP)', 'procedimentos-padrao', '#F59E0B', 'FileText', 'Scripts de atendimento telefônico, escalonamento N2/N3.')
+        ON CONFLICT DO NOTHING;
+      `);
+
+      // Cities
+      await query(`
+        INSERT INTO cidades (id, name, uf, code_ibge, notes) VALUES
+        ('c1111111-1111-1111-1111-111111111111', 'São Paulo', 'SP', '3550308', 'Requer VPN ativa para acesso aos sistemas internos da prefeitura.'),
+        ('c2222222-2222-2222-2222-222222222222', 'Rio de Janeiro', 'RJ', '3304557', 'Acesso via certificado digital A1 obrigatório.')
+        ON CONFLICT DO NOTHING;
+      `);
+
+      // Links
+      await query(`
+        INSERT INTO sistemas_links (id, city_id, name, url, category, access_notes, is_active) VALUES
+        ('e1111111-1111-1111-1111-111111111111', 'c1111111-1111-1111-1111-111111111111', 'Portal do Contribuinte (ISS)', 'https://tributario.prefeitura.sp.gov.br', 'Sistema Tributário', 'Usar VPN Corporativa', TRUE),
+        ('e2222222-2222-2222-2222-222222222222', 'c1111111-1111-1111-1111-111111111111', 'Portal do Cidadão e Certidões', 'https://cidadao.prefeitura.sp.gov.br', 'Portal do Cidadão', 'IP liberado na rede interna', TRUE)
+        ON CONFLICT DO NOTHING;
+      `);
+
+      // Canned Responses
+      await query(`
+        INSERT INTO canned_responses (id, title, shortcut, category_id, body, variables, usage_count, created_by) VALUES
+        ('f1111111-1111-1111-1111-111111111111', 'Redefinição de Senha e Token de Acesso', '/reset-senha', '11111111-1111-1111-1111-111111111111', 
+        'Olá {{nome_cliente}}, tudo bem?\n\nRecebemos sua solicitação para redefinição de acesso no sistema {{sistema}}.\n\nPara cadastrar sua nova senha com segurança, acesse o link abaixo (válido por 2 horas):\n👉 {{link_redefinicao}}\n\nCaso não tenha solicitado essa alteração, por favor ignore este e-mail.\n\nAtenciosamente,\n{{nome_agente}} - Equipe de Suporte Técnico',
+        '[{"key": "nome_cliente", "label": "Nome do Cliente", "defaultValue": "Cliente"}, {"key": "sistema", "label": "Sistema/Módulo", "defaultValue": "ERP Cloud"}, {"key": "link_redefinicao", "label": "Link de Redefinição", "defaultValue": "https://app.empresa.com.br/reset?token=xyz123"}, {"key": "nome_agente", "label": "Nome do Operador", "defaultValue": "Suporte"}]'::jsonb, 142, 'Carlos Silva (Admin)'),
+        
+        ('f2222222-2222-2222-2222-222222222222', 'Envio de 2ª Via de Boleto / Fatura', '/boleto', '22222222-2222-2222-2222-222222222222',
+        'Prezado(a) {{nome_cliente}},\n\nConforme solicitado, segue o link para acesso e cópia da linha digitável da fatura com vencimento em {{data_vencimento}}:\n\n📌 Linha Digitável: {{codigo_barras}}\n📄 Link do PDF: {{link_boleto}}\n\nLembramos que pagamentos via PIX são compensados em até 5 minutos!\n\nQualquer dúvida, estamos à disposição.\nAtenciosamente,\n{{nome_agente}} - Financeiro e Suporte',
+        '[{"key": "nome_cliente", "label": "Nome do Cliente", "defaultValue": "Cliente"}, {"key": "data_vencimento", "label": "Data Vencimento", "defaultValue": "10/08/2026"}, {"key": "codigo_barras", "label": "Código PIX/Boleto", "defaultValue": "00190.00009 01234.567809 90000.123457 1 9000000015000"}, {"key": "link_boleto", "label": "URL do PDF", "defaultValue": "https://fatura.empresa.com.br/pdf/8849"}, {"key": "nome_agente", "label": "Nome do Agente", "defaultValue": "Suporte"}]'::jsonb, 98, 'Mariana Costa (Agente)')
+        ON CONFLICT DO NOTHING;
+      `);
+
+      // Knowledge Articles
+      await query(`
+        INSERT INTO knowledge_articles (id, title, slug, category_id, content_md, tags, views_count, helpful_count, author_id, author_name) VALUES
+        ('a1111111-1111-1111-1111-111111111111', 'Guia de Resolução: Erro 401 Unauthorized na API', 'guia-erro-401-api', '33333333-3333-3333-3333-333333333333',
+        '# Guia de Resolução: Erro 401 Unauthorized na API\n\nO erro \`401 Unauthorized\` ocorre quando o cliente tenta acessar um endpoint protegido sem enviar um token de autenticação válido ou quando o token expirou.\n\n---\n\n### 🔍 Passo a Passo para Diagnóstico (Troubleshooting)\n\n1. **Verifique se o Header Bearer está sendo enviado corretamente:**\n   \`\`\`bash\n   curl -X GET "https://api.empresa.com.br/v1/pedidos" \\\n     -H "Authorization: Bearer <SEU_JWT_TOKEN>"\n   \`\`\`\n\n2. **Validar expiração do Token JWT:**\n   - Acesse o [jwt.io](https://jwt.io) para decodificar o payload.\n   - Verifique o campo \`exp\` (timestamp UNIX). Se for menor que a hora atual UTC, solicite a renovação via endpoint \`/api/auth/refresh\`.\n\n3. **Verificar IP na Whitelist (Se aplicável):**\n   - Clientes Enterprise possuem trava de IP de origem. Verifique no painel Admin se o IP do servidor do cliente consta na lista liberada.',
+        '["API", "JWT", "Erro 401", "Integração"]'::jsonb, 320, 45, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)')
+        ON CONFLICT DO NOTHING;
+      `);
+
+      // Audit Log Seed
+      await query(`
+        INSERT INTO historico_auditoria (id, user_id, user_name, user_role, module, action, description, details) VALUES
+        ('a1111111-2222-3333-4444-555555555555', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)', 'ADMIN', 'Cidades', 'CREATE', 'Cadastrou a cidade São Paulo - SP', '{"city": "São Paulo", "uf": "SP", "codeIBGE": "3550308"}'::jsonb),
+        ('a2222222-3333-4444-5555-666666666666', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Mariana Costa (Agente)', 'AGENT', 'Links', 'CREATE', 'Vinculou o sistema Portal do Contribuinte à cidade São Paulo', '{"link": "Portal do Contribuinte (ISS)", "url": "https://tributario.prefeitura.sp.gov.br"}'::jsonb)
+        ON CONFLICT DO NOTHING;
+      `);
+    }
+
+    console.log("✅ Banco de dados PostgreSQL sincronizado com Hashes Bcrypt e Avatares Locais!");
+  } catch (err) {
+    console.error("❌ Erro ao inicializar o banco de dados PostgreSQL:", err);
+  }
+}
+
+// =============================================================================
+// REST API ENDPOINTS (/api/*) PERSISTIDOS E SEGUROS
+// =============================================================================
+
+// --- Auth & Session ---
+app.get("/api/auth/me", async (req, res) => {
+  try {
+    const userRes = await query("SELECT * FROM users WHERE id::text = $1", [activeUserId]);
+    const currentUser = userRes.rows[0] ? sanitizeUser(userRes.rows[0]) : null;
+    res.json({ user: currentUser, activeUserId });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro interno no servidor." });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password, userId } = req.body;
+    const clientKey = email || userId || req.ip;
+
+    if (!checkRateLimit(clientKey)) {
+      return res.status(429).json({ error: "Muitas tentativas incorretas de login. Tente novamente em 15 minutos (Proteção Brute-Force)." });
+    }
+
+    let qResult;
+
+    if (userId) {
+      qResult = await query("SELECT * FROM users WHERE id::text = $1", [userId]);
+    } else if (email) {
+      if (!isValidEmail(email)) {
+        return res.status(400).json({ error: "Formato de e-mail inválido." });
+      }
+      qResult = await query("SELECT * FROM users WHERE LOWER(email) = LOWER($1)", [String(email).trim()]);
+    } else {
+      return res.status(400).json({ error: "Informe o e-mail ou selecione o operador." });
+    }
+
+    const targetUser = qResult.rows[0];
+
+    if (!targetUser) {
+      recordFailedAttempt(clientKey);
+      return res.status(401).json({ error: "E-mail ou senha incorretos." });
+    }
+
+    if (!targetUser.active) {
+      return res.status(403).json({ error: "Esta conta de usuário está desativada no momento." });
+    }
+
+    // Verify password with Bcrypt
+    if (password && targetUser.password_hash) {
+      let isMatch = false;
+      if (targetUser.password_hash.startsWith("$2a$") || targetUser.password_hash.startsWith("$2b$")) {
+        isMatch = await bcrypt.compare(password, targetUser.password_hash);
+      } else {
+        // Fallback para senhas legado
+        isMatch = (password === targetUser.password_hash);
+        if (isMatch) {
+          // Re-hash automático para Bcrypt na primeira autenticação bem sucedida
+          const newHash = await bcrypt.hash(password, 10);
+          await query("UPDATE users SET password_hash = $1 WHERE id = $2", [newHash, targetUser.id]);
+        }
+      }
+
+      if (!isMatch) {
+        recordFailedAttempt(clientKey);
+        return res.status(401).json({ error: "Senha incorreta. Verifique suas credenciais." });
+      }
+    }
+
+    resetAttempt(clientKey);
+    activeUserId = targetUser.id;
+
+    recordAuditLog({
+      userId: targetUser.id,
+      userName: targetUser.name,
+      userRole: targetUser.role,
+      module: "Autenticação",
+      action: "LOGIN",
+      description: `Usuário ${targetUser.name} (${targetUser.email}) realizou login com autenticação Bcrypt`,
+      details: { department: targetUser.department, role: targetUser.role }
+    });
+
+    res.json({
+      token: `jwt_token_${targetUser.id}_${Date.now()}`,
+      user: sanitizeUser(targetUser),
+      mustChangePassword: false
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro na autenticação." });
+  }
+});
+
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    const userRes = await query("SELECT * FROM users WHERE id::text = $1", [activeUserId]);
+    if (userRes.rows[0]) {
+      recordAuditLog({
+        userId: userRes.rows[0].id,
+        userName: userRes.rows[0].name,
+        userRole: userRes.rows[0].role,
+        module: "Autenticação",
+        action: "LOGOUT",
+        description: `Usuário ${userRes.rows[0].name} encerrou a sessão`,
+        details: { email: userRes.rows[0].email }
+      });
+    }
+
+    activeUserId = "";
+    res.json({ success: true, message: "Sessão encerrada com sucesso." });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao encerrar sessão." });
+  }
+});
+
+app.post("/api/auth/switch-role", async (req, res) => {
+  try {
+    const { role } = req.body;
+    const qResult = await query("SELECT * FROM users WHERE role = $1 AND active = TRUE LIMIT 1", [role]);
+    if (qResult.rows[0]) {
+      activeUserId = qResult.rows[0].id;
+      return res.json({ success: true, user: sanitizeUser(qResult.rows[0]) });
+    }
+    res.status(400).json({ error: "Operador com este nível não encontrado." });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao alterar nível de acesso." });
+  }
+});
+
+app.post("/api/auth/switch-user-id", async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const qResult = await query("SELECT * FROM users WHERE id::text = $1", [userId]);
+    if (qResult.rows[0]) {
+      activeUserId = qResult.rows[0].id;
+      return res.json({ success: true, user: sanitizeUser(qResult.rows[0]) });
+    }
+    res.status(404).json({ error: "Usuário não encontrado." });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao alterar usuário ativo." });
+  }
+});
+
+// --- Audit Trail ---
+app.get("/api/audit-logs", async (req, res) => {
+  try {
+    const { module, action, search } = req.query;
+    let sql = "SELECT id, user_id AS \"userId\", user_name AS \"userName\", user_role AS \"userRole\", module, action, description, details, created_at AS \"timestamp\" FROM historico_auditoria WHERE 1=1";
+    const params: any[] = [];
+
+    if (module && module !== "ALL") {
+      params.push(module);
+      sql += ` AND module = $${params.length}`;
+    }
+
+    if (action && action !== "ALL") {
+      params.push(action);
+      sql += ` AND action = $${params.length}`;
+    }
+
+    if (search) {
+      params.push(`%${String(search).toLowerCase()}%`);
+      sql += ` AND (LOWER(user_name) LIKE $${params.length} OR LOWER(description) LIKE $${params.length} OR LOWER(module) LIKE $${params.length})`;
+    }
+
+    sql += " ORDER BY created_at DESC LIMIT 100";
+    const result = await query(sql, params);
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao consultar histórico de auditoria." });
+  }
+});
+
+// --- System Stats ---
+app.get("/api/stats", async (req, res) => {
+  try {
+    const [cidadesRes, linksRes, cannedRes, kbRes, catRes, userRes, copyRes] = await Promise.all([
+      query("SELECT COUNT(*) FROM cidades"),
+      query("SELECT COUNT(*) FROM sistemas_links"),
+      query("SELECT COUNT(*) FROM canned_responses"),
+      query("SELECT COUNT(*) FROM knowledge_articles"),
+      query("SELECT COUNT(*) FROM categories"),
+      query("SELECT COUNT(*) FROM users"),
+      query("SELECT COALESCE(SUM(usage_count), 0) AS total FROM canned_responses")
+    ]);
+
+    res.json({
+      totalCities: parseInt(cidadesRes.rows[0].count, 10),
+      totalSystemLinks: parseInt(linksRes.rows[0].count, 10),
+      totalResponses: parseInt(cannedRes.rows[0].count, 10),
+      totalArticles: parseInt(kbRes.rows[0].count, 10),
+      totalCategories: parseInt(catRes.rows[0].count, 10),
+      totalUsers: parseInt(userRes.rows[0].count, 10),
+      totalCopies: parseInt(copyRes.rows[0].total, 10)
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao calcular estatísticas." });
+  }
+});
+
+// --- Users Management (PostgreSQL CRUD + Bcrypt + Local Avatars) ---
+app.get("/api/users", async (req, res) => {
+  try {
+    const uRes = await query("SELECT id, name, email, role, department, active, avatar_url AS \"avatarUrl\", created_at AS \"createdAt\" FROM users ORDER BY created_at DESC");
+    res.json(uRes.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao listar operadores." });
+  }
+});
+
+app.post("/api/users", async (req, res) => {
+  try {
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    if (currentRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem cadastrar novos operadores." });
+    }
+
+    const { name, email, role, department, password } = req.body;
+    if (!name || !email || !role) {
+      return res.status(400).json({ error: "Nome, e-mail e nível de acesso são obrigatórios." });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ error: "Formato de e-mail inválido." });
+    }
+
+    if (!password) {
+      return res.status(400).json({ error: "A senha inicial é obrigatória para cadastrar o operador." });
+    }
+
+    const policyCheck = validatePasswordPolicy(password);
+    if (!policyCheck.isValid) {
+      return res.status(400).json({ error: policyCheck.error });
+    }
+
+    // Criptografia de Senha com Bcrypt (10 rounds)
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const avatarUrl = getLocalAvatarForRole(role);
+    
+    const insertRes = await query(
+      `INSERT INTO users (id, name, email, password_hash, role, department, active, avatar_url)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
+       RETURNING id, name, email, role, department, active, avatar_url AS "avatarUrl", created_at AS "createdAt"`,
+      [crypto.randomUUID(), String(name).trim(), String(email).toLowerCase().trim(), hashedPassword, role, department || "Suporte N1", avatarUrl]
+    );
+
+    const newUser = insertRes.rows[0];
+
+    recordAuditLog({
+      module: "Usuários",
+      action: "CREATE",
+      description: `Cadastrou o novo operador ${name} (${email}) com Hash Bcrypt e Avatar Local`,
+      details: { name, email, role }
+    });
+
+    res.status(201).json(newUser);
+  } catch (err: any) {
+    if (err.code === "23505") {
+      return res.status(400).json({ error: "Este endereço de e-mail já está cadastrado no sistema." });
+    }
+    console.error("Erro ao cadastrar usuário no PostgreSQL:", err);
+    res.status(500).json({ error: "Erro ao cadastrar usuário." });
+  }
+});
+
+app.put("/api/users/:id", async (req, res) => {
+  try {
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    if (currentRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem modificar perfis." });
+    }
+
+    const { id } = req.params;
+    const { name, email, role, department, active, newPassword, password } = req.body;
+    const pwdToSet = newPassword || password;
+
+    if (email && !isValidEmail(email)) {
+      return res.status(400).json({ error: "Formato de e-mail inválido." });
+    }
+
+    if (pwdToSet) {
+      const policyCheck = validatePasswordPolicy(pwdToSet);
+      if (!policyCheck.isValid) {
+        return res.status(400).json({ error: policyCheck.error });
+      }
+      const hashedPassword = await bcrypt.hash(pwdToSet, 10);
+      await query("UPDATE users SET password_hash = $1 WHERE id::text = $2", [hashedPassword, id]);
+    }
+
+    const avatarUrl = role ? getLocalAvatarForRole(role) : null;
+
+    const updateRes = await query(
+      `UPDATE users
+       SET name = COALESCE($1, name),
+           email = COALESCE($2, email),
+           role = COALESCE($3, role),
+           department = COALESCE($4, department),
+           active = COALESCE($5, active),
+           avatar_url = COALESCE($6, avatar_url),
+           updated_at = NOW()
+       WHERE id::text = $7
+       RETURNING id, name, email, role, department, active, avatar_url AS "avatarUrl", created_at AS "createdAt"`,
+      [name ? String(name).trim() : null, email ? String(email).toLowerCase().trim() : null, role, department, active, avatarUrl, id]
+    );
+
+    if (updateRes.rows.length === 0) {
+      return res.status(404).json({ error: "Usuário não encontrado." });
+    }
+
+    recordAuditLog({
+      module: "Usuários",
+      action: "UPDATE",
+      description: `Atualizou o perfil do operador ${updateRes.rows[0].name}`
+    });
+
+    res.json(updateRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao atualizar operador." });
+  }
+});
+
+app.patch("/api/users/:id/toggle-status", async (req, res) => {
+  try {
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    if (currentRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem alterar o status." });
+    }
+
+    const { id } = req.params;
+    const updateRes = await query(
+      "UPDATE users SET active = NOT active, updated_at = NOW() WHERE id::text = $1 RETURNING active",
+      [id]
+    );
+
+    if (updateRes.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
+
+    res.json({ success: true, active: updateRes.rows[0].active });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao alterar status do operador." });
+  }
+});
+
+app.delete("/api/users/:id", async (req, res) => {
+  try {
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    if (currentRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem excluir usuários." });
+    }
+
+    const { id } = req.params;
+    if (id === activeUserId) {
+      return res.status(400).json({ error: "Você não pode excluir sua própria conta ativa no momento." });
+    }
+
+    const delRes = await query("DELETE FROM users WHERE id::text = $1 RETURNING name, email", [id]);
+    if (delRes.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado." });
+
+    recordAuditLog({
+      module: "Usuários",
+      action: "DELETE",
+      description: `Excluiu a conta do operador ${delRes.rows[0].name} (${delRes.rows[0].email})`
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao excluir operador." });
+  }
+});
+
+// --- Categories (PostgreSQL CRUD) ---
+app.get("/api/categories", async (req, res) => {
+  try {
+    const catRes = await query(`
+      SELECT 
+        c.id, 
+        c.name, 
+        c.slug, 
+        c.color, 
+        c.icon, 
+        c.description, 
+        c.created_at AS "createdAt",
+        (
+          SELECT COUNT(*) FROM canned_responses r WHERE r.category_id = c.id
+        ) + (
+          SELECT COUNT(*) FROM knowledge_articles a WHERE a.category_id = c.id
+        ) AS "itemCount"
+      FROM categories c
+      ORDER BY c.name ASC
+    `);
+
+    const categories = catRes.rows.map(row => ({
+      ...row,
+      itemCount: parseInt(row.itemCount, 10) || 0
+    }));
+
+    res.json(categories);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao consultar categorias." });
+  }
+});
+
+app.post("/api/categories", async (req, res) => {
+  try {
+    const { name, color, icon, description } = req.body;
+    if (!name) return res.status(400).json({ error: "O nome da categoria é obrigatório." });
+
+    const slug = String(name).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-");
+
+    const insertRes = await query(
+      `INSERT INTO categories (id, name, slug, color, icon, description)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, slug, color, icon, description, created_at AS "createdAt"`,
+      [crypto.randomUUID(), String(name).trim(), slug, color || "#3B82F6", icon || "Folder", description || ""]
+    );
+
+    recordAuditLog({
+      module: "Categorias",
+      action: "CREATE",
+      description: `Cadastrou a nova categoria '${name}'`
+    });
+
+    res.status(201).json(insertRes.rows[0]);
+  } catch (err: any) {
+    if (err.code === "23505") {
+      return res.status(400).json({ error: "Já existe uma categoria com este nome." });
+    }
+    res.status(500).json({ error: "Erro ao cadastrar categoria." });
+  }
+});
+
+app.put("/api/categories/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, color, icon, description } = req.body;
+    const slug = name ? String(name).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-") : null;
+
+    const updateRes = await query(
+      `UPDATE categories
+       SET name = COALESCE($1, name),
+           slug = COALESCE($2, slug),
+           color = COALESCE($3, color),
+           icon = COALESCE($4, icon),
+           description = COALESCE($5, description),
+           updated_at = NOW()
+       WHERE id::text = $6
+       RETURNING id, name, slug, color, icon, description, created_at AS "createdAt"`,
+      [name ? String(name).trim() : null, slug, color, icon, description, id]
+    );
+
+    if (updateRes.rows.length === 0) return res.status(404).json({ error: "Categoria não encontrada." });
+
+    res.json(updateRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao atualizar categoria." });
+  }
+});
+
+app.delete("/api/categories/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query("DELETE FROM categories WHERE id::text = $1", [id]);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao excluir categoria." });
+  }
+});
+
+// --- Cities & Links (PostgreSQL CRUD) ---
+app.get("/api/cities", async (req, res) => {
+  try {
+    const { uf, search } = req.query;
+    let sql = "SELECT id, name, uf, code_ibge AS \"codeIBGE\", notes, created_at AS \"createdAt\" FROM cidades WHERE 1=1";
+    const params: any[] = [];
+
+    if (uf && uf !== "ALL") {
+      params.push(String(uf).toUpperCase());
+      sql += ` AND uf = $${params.length}`;
+    }
+
+    if (search) {
+      params.push(`%${String(search).toLowerCase()}%`);
+      sql += ` AND (LOWER(name) LIKE $${params.length} OR LOWER(uf) LIKE $${params.length} OR LOWER(notes) LIKE $${params.length})`;
+    }
+
+    sql += " ORDER BY name ASC";
+    const citiesRes = await query(sql, params);
+    
+    // Fetch system links for all returned cities
+    const cities = await Promise.all(
+      citiesRes.rows.map(async c => {
+        const linksRes = await query(
+          "SELECT id, city_id AS \"cityId\", name, url, category, access_notes AS \"accessNotes\", is_active AS \"isActive\", created_at AS \"createdAt\" FROM sistemas_links WHERE city_id = $1 ORDER BY name ASC",
+          [c.id]
+        );
+        return {
+          ...c,
+          linksCount: linksRes.rows.length,
+          links: linksRes.rows
+        };
+      })
+    );
+
+    res.json(cities);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao consultar cidades." });
+  }
+});
+
+app.post("/api/cities", async (req, res) => {
+  try {
+    const { name, uf, codeIBGE, notes } = req.body;
+    if (!name || !uf) return res.status(400).json({ error: "Nome e UF são obrigatórios." });
+
+    const insertRes = await query(
+      `INSERT INTO cidades (id, name, uf, code_ibge, notes)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, uf, code_ibge AS "codeIBGE", notes, created_at AS "createdAt"`,
+      [crypto.randomUUID(), String(name).trim(), String(uf).toUpperCase().trim(), codeIBGE || "", notes || ""]
+    );
+
+    recordAuditLog({
+      module: "Cidades",
+      action: "CREATE",
+      description: `Cadastrou a cidade ${name} - ${uf.toUpperCase()}`
+    });
+
+    res.status(201).json({ ...insertRes.rows[0], linksCount: 0, links: [] });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao cadastrar cidade." });
+  }
+});
+
+app.put("/api/cities/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, uf, codeIBGE, notes } = req.body;
+
+    const updateRes = await query(
+      `UPDATE cidades
+       SET name = COALESCE($1, name),
+           uf = COALESCE($2, uf),
+           code_ibge = COALESCE($3, code_ibge),
+           notes = COALESCE($4, notes),
+           updated_at = NOW()
+       WHERE id::text = $5
+       RETURNING id, name, uf, code_ibge AS "codeIBGE", notes, created_at AS "createdAt"`,
+      [name ? String(name).trim() : null, uf ? String(uf).toUpperCase().trim() : null, codeIBGE, notes, id]
+    );
+
+    if (updateRes.rows.length === 0) return res.status(404).json({ error: "Cidade não encontrada." });
+
+    const linksRes = await query("SELECT * FROM sistemas_links WHERE city_id::text = $1", [id]);
+    res.json({ ...updateRes.rows[0], linksCount: linksRes.rows.length, links: linksRes.rows });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao atualizar cidade." });
+  }
+});
+
+app.delete("/api/cities/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query("DELETE FROM cidades WHERE id::text = $1", [id]);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao excluir cidade." });
+  }
+});
+
+app.post("/api/cities/:cityId/links", async (req, res) => {
+  try {
+    const { cityId } = req.params;
+    const { name, url, category, accessNotes, isActive } = req.body;
+
+    if (!name || !url) return res.status(400).json({ error: "Nome e URL são obrigatórios." });
+
+    const insertRes = await query(
+      `INSERT INTO sistemas_links (id, city_id, name, url, category, access_notes, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, city_id AS "cityId", name, url, category, access_notes AS "accessNotes", is_active AS "isActive", created_at AS "createdAt"`,
+      [crypto.randomUUID(), cityId, String(name).trim(), String(url).trim(), category || "Sistema Tributário", accessNotes || "", isActive !== undefined ? isActive : true]
+    );
+
+    res.status(201).json(insertRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao vincular sistema à cidade." });
+  }
+});
+
+app.put("/api/cities/links/:linkId", async (req, res) => {
+  try {
+    const { linkId } = req.params;
+    const { name, url, category, accessNotes, isActive } = req.body;
+
+    const updateRes = await query(
+      `UPDATE sistemas_links
+       SET name = COALESCE($1, name),
+           url = COALESCE($2, url),
+           category = COALESCE($3, category),
+           access_notes = COALESCE($4, access_notes),
+           is_active = COALESCE($5, is_active),
+           updated_at = NOW()
+       WHERE id::text = $6
+       RETURNING id, city_id AS "cityId", name, url, category, access_notes AS "accessNotes", is_active AS "isActive", created_at AS "createdAt"`,
+      [name, url, category, accessNotes, isActive, linkId]
+    );
+
+    if (updateRes.rows.length === 0) return res.status(404).json({ error: "Link não encontrado." });
+
+    res.json(updateRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao atualizar link." });
+  }
+});
+
+app.delete("/api/cities/links/:linkId", async (req, res) => {
+  try {
+    const { linkId } = req.params;
+    await query("DELETE FROM sistemas_links WHERE id::text = $1", [linkId]);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao excluir link." });
+  }
+});
+
+// --- Canned Responses (Templates / Respostas Rápidas) ---
+app.get("/api/canned-responses", async (req, res) => {
+  try {
+    const { categoryId, search } = req.query;
+    let sql = `
+      SELECT 
+        id, 
+        title, 
+        shortcut, 
+        category_id AS "categoryId", 
+        body, 
+        variables, 
+        usage_count AS "usageCount", 
+        is_favorite AS "isFavorite", 
+        created_by AS "createdBy", 
+        created_at AS "createdAt" 
+      FROM canned_responses WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (categoryId && categoryId !== "all") {
+      params.push(categoryId);
+      sql += ` AND category_id::text = $${params.length}`;
+    }
+
+    if (search) {
+      params.push(`%${String(search).toLowerCase()}%`);
+      sql += ` AND (LOWER(title) LIKE $${params.length} OR LOWER(body) LIKE $${params.length} OR LOWER(shortcut) LIKE $${params.length})`;
+    }
+
+    sql += " ORDER BY usage_count DESC, title ASC";
+    const result = await query(sql, params);
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao consultar respostas padrão." });
+  }
+});
+
+app.post("/api/canned-responses", async (req, res) => {
+  try {
+    const { title, shortcut, categoryId, body, variables } = req.body;
+    if (!title || !categoryId || !body) {
+      return res.status(400).json({ error: "Título, categoria e mensagem são obrigatórios." });
+    }
+
+    const uRes = await query("SELECT name FROM users WHERE id::text = $1", [activeUserId]);
+    const createdBy = uRes.rows[0]?.name || "Suporte";
+
+    const insertRes = await query(
+      `INSERT INTO canned_responses (id, title, shortcut, category_id, body, variables, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, title, shortcut, category_id AS "categoryId", body, variables, usage_count AS "usageCount", is_favorite AS "isFavorite", created_by AS "createdBy", created_at AS "createdAt"`,
+      [
+        crypto.randomUUID(),
+        String(title).trim(),
+        shortcut ? (shortcut.startsWith("/") ? shortcut : "/" + shortcut) : null,
+        categoryId,
+        body,
+        JSON.stringify(Array.isArray(variables) ? variables : []),
+        createdBy
+      ]
+    );
+
+    res.status(201).json(insertRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao criar modelo de resposta." });
+  }
+});
+
+app.put("/api/canned-responses/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, shortcut, categoryId, body, variables, isFavorite } = req.body;
+
+    const updateRes = await query(
+      `UPDATE canned_responses
+       SET title = COALESCE($1, title),
+           shortcut = COALESCE($2, shortcut),
+           category_id = COALESCE($3, category_id),
+           body = COALESCE($4, body),
+           variables = COALESCE($5, variables),
+           is_favorite = COALESCE($6, is_favorite),
+           updated_at = NOW()
+       WHERE id::text = $7
+       RETURNING id, title, shortcut, category_id AS "categoryId", body, variables, usage_count AS "usageCount", is_favorite AS "isFavorite", created_by AS "createdBy", created_at AS "createdAt"`,
+      [
+        title,
+        shortcut ? (shortcut.startsWith("/") ? shortcut : "/" + shortcut) : null,
+        categoryId,
+        body,
+        variables ? JSON.stringify(variables) : null,
+        isFavorite,
+        id
+      ]
+    );
+
+    if (updateRes.rows.length === 0) return res.status(404).json({ error: "Modelo não encontrado." });
+
+    res.json(updateRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao atualizar modelo." });
+  }
+});
+
+app.delete("/api/canned-responses/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query("DELETE FROM canned_responses WHERE id::text = $1", [id]);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao excluir modelo." });
+  }
+});
+
+app.post("/api/canned-responses/:id/copy", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateRes = await query(
+      "UPDATE canned_responses SET usage_count = usage_count + 1 WHERE id::text = $1 RETURNING usage_count AS \"usageCount\"",
+      [id]
+    );
+    if (updateRes.rows.length > 0) {
+      res.json({ success: true, usageCount: updateRes.rows[0].usageCount });
+    } else {
+      res.status(404).json({ error: "Item não encontrado." });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao contabilizar cópia." });
+  }
+});
+
+// --- Knowledge Base (Wiki / Artigos) ---
+app.get("/api/kb/articles", async (req, res) => {
+  try {
+    const { categoryId, search, tag } = req.query;
+    let sql = `
+      SELECT 
+        id, 
+        title, 
+        slug, 
+        category_id AS "categoryId", 
+        content_md AS "contentMd", 
+        tags, 
+        views_count AS "viewsCount", 
+        helpful_count AS "helpfulCount", 
+        author_id AS "authorId", 
+        author_name AS "authorName", 
+        created_at AS "createdAt" 
+      FROM knowledge_articles WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (categoryId && categoryId !== "all") {
+      params.push(categoryId);
+      sql += ` AND category_id::text = $${params.length}`;
+    }
+
+    if (search) {
+      params.push(`%${String(search).toLowerCase()}%`);
+      sql += ` AND (LOWER(title) LIKE $${params.length} OR LOWER(content_md) LIKE $${params.length})`;
+    }
+
+    sql += " ORDER BY created_at DESC";
+    const result = await query(sql, params);
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao consultar artigos." });
+  }
+});
+
+app.post("/api/kb/articles", async (req, res) => {
+  try {
+    const { title, categoryId, contentMd, tags } = req.body;
+    if (!title || !categoryId || !contentMd) {
+      return res.status(400).json({ error: "Título, categoria e conteúdo Markdown são obrigatórios." });
+    }
+
+    const uRes = await query("SELECT name FROM users WHERE id::text = $1", [activeUserId]);
+    const authorName = uRes.rows[0]?.name || "Suporte";
+    const slug = String(title).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-");
+
+    const insertRes = await query(
+      `INSERT INTO knowledge_articles (id, title, slug, category_id, content_md, tags, author_id, author_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, title, slug, category_id AS "categoryId", content_md AS "contentMd", tags, views_count AS "viewsCount", helpful_count AS "helpfulCount", author_id AS "authorId", author_name AS "authorName", created_at AS "createdAt"`,
+      [crypto.randomUUID(), String(title).trim(), slug, categoryId, contentMd, JSON.stringify(Array.isArray(tags) ? tags : []), activeUserId || null, authorName]
+    );
+
+    res.status(201).json(insertRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao criar artigo na wiki." });
+  }
+});
+
+app.put("/api/kb/articles/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, categoryId, contentMd, tags } = req.body;
+    const slug = title ? String(title).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-") : null;
+
+    const updateRes = await query(
+      `UPDATE knowledge_articles
+       SET title = COALESCE($1, title),
+           slug = COALESCE($2, slug),
+           category_id = COALESCE($3, category_id),
+           content_md = COALESCE($4, content_md),
+           tags = COALESCE($5, tags),
+           updated_at = NOW()
+       WHERE id::text = $6
+       RETURNING id, title, slug, category_id AS "categoryId", content_md AS "contentMd", tags, views_count AS "viewsCount", helpful_count AS "helpfulCount", author_id AS "authorId", author_name AS "authorName", created_at AS "createdAt"`,
+      [title ? String(title).trim() : null, slug, categoryId, contentMd, tags ? JSON.stringify(tags) : null, id]
+    );
+
+    if (updateRes.rows.length === 0) return res.status(404).json({ error: "Artigo não encontrado." });
+
+    res.json(updateRes.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao atualizar artigo." });
+  }
+});
+
+app.delete("/api/kb/articles/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    await query("DELETE FROM knowledge_articles WHERE id::text = $1", [id]);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao excluir artigo." });
+  }
+});
+
+// --- Scratchpad ---
+app.get("/api/scratchpad", async (req, res) => {
+  try {
+    const padRes = await query(
+      "SELECT content, last_saved_at AS \"lastSavedAt\" FROM user_scratchpads WHERE user_id::text = $1",
+      [activeUserId]
+    );
+    if (padRes.rows.length > 0) {
+      res.json(padRes.rows[0]);
+    } else {
+      res.json({ content: "", lastSavedAt: new Date().toISOString() });
+    }
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao carregar rascunho." });
+  }
+});
+
+app.put("/api/scratchpad", async (req, res) => {
+  try {
+    const { content } = req.body;
+    const saveRes = await query(
+      `INSERT INTO user_scratchpads (user_id, content, last_saved_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (user_id) DO UPDATE SET content = EXCLUDED.content, last_saved_at = NOW()
+       RETURNING last_saved_at AS "lastSavedAt"`,
+      [activeUserId, content || ""]
+    );
+    res.json({ success: true, lastSavedAt: saveRes.rows[0].lastSavedAt });
+  } catch (err: any) {
+    res.status(500).json({ error: "Erro ao salvar rascunho." });
+  }
+});
+
+// --- AI Assistant: Gemini ---
+app.post("/api/ai/optimize-response", async (req, res) => {
+  try {
+    const { rawNotes } = req.body;
+    if (!rawNotes) return res.status(400).json({ error: "Anotação ou texto bruto não informado." });
+
+    const client = getGeminiClient();
+    if (!client) {
+      return res.status(503).json({
+        error: "Chave da API Gemini não configurada.",
+        fallbackText: `Prezado Cliente,\n\nRecebemos suas anotações técnicas:\n"${rawNotes}"\n\nNossa equipe está analisando o caso e retornará em breve.\n\nAtenciosamente,\nSuporte Técnico`
+      });
+    }
+
+    const prompt = `Você é um especialista em comunicação e Suporte Técnico Sênior. 
+Transforme as seguintes notas/anotações técnicas brutas em uma resposta ao cliente extremamente polida, empática, profissional e clara.
+Suporte a variáveis no formato {{nome_cliente}}, {{protocolo}}, {{link}}, etc se necessário.
+
+Notas do Atendimento:
+${rawNotes}
+
+Retorne diretamente o texto pronto da resposta em português do Brasil, sem saudações extras direcionadas ao operador.`;
+
+    const response = await client.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+
+    res.json({
+      optimizedText: response.text || "Não foi possível gerar a resposta."
+    });
+  } catch (error: any) {
+    console.error("Gemini AI Error:", error);
+    res.status(500).json({
+      error: "Erro na geração por IA",
+      details: error?.message || "Erro desconhecido"
+    });
+  }
+});
+
+// =============================================================================
+// VITE / PRODUCTION STATIC FILE SERVING
+// =============================================================================
+
+async function startServer() {
+  // Initialize Database Schema, Migrations & Bcrypt Seed
+  await initDatabase();
+
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 SupportHub Server seguro rodando na porta ${PORT}`);
+  });
+}
+
+startServer();

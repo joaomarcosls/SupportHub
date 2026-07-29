@@ -1,0 +1,6 @@
+{
+  "name": "SupportHub - Utilitário de Suporte Técnico",
+  "description": "Sistema utilitário interno para otimizar o dia a dia do time de suporte técnico com gestão de cidades, catálogo de links/sistemas municipais, respostas rápidas, base de conhecimento e controle RBAC.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
