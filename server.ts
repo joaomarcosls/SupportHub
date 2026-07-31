@@ -353,9 +353,22 @@ async function initDatabase() {
 // --- Auth & Session ---
 app.get("/api/auth/me", async (req, res) => {
   try {
-    const userRes = await query("SELECT * FROM users WHERE id::text = $1", [activeUserId]);
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.json({ user: null, activeUserId: "" });
+    }
+
+    const token = authHeader.substring(7);
+    const match = token.match(/^jwt_token_([a-f0-9-]+)_\d+$/);
+    if (!match) {
+      return res.json({ user: null, activeUserId: "" });
+    }
+
+    const tokenUserId = match[1];
+    const userRes = await query("SELECT * FROM users WHERE id::text = $1 AND active = TRUE", [tokenUserId]);
     const currentUser = userRes.rows[0] ? sanitizeUser(userRes.rows[0]) : null;
-    res.json({ user: currentUser, activeUserId });
+
+    res.json({ user: currentUser, activeUserId: currentUser ? tokenUserId : "" });
   } catch (err: any) {
     res.status(500).json({ error: "Erro interno no servidor." });
   }

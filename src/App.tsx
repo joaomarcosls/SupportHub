@@ -62,15 +62,27 @@ export function App() {
   // 1. Initial Load of API Data
   const fetchData = async () => {
     try {
-      // User Info
-      const userRes = await fetch('/api/auth/me');
-      const userData = await userRes.json();
-      if (userData.user) {
-        setCurrentUser(userData.user);
-        if (userData.user.mustChangePassword) {
-          setIsMandatoryPasswordChange(true);
-          setIsChangePasswordModalOpen(true);
+      const token = sessionStorage.getItem('supporthub_token');
+      let loggedUser: User | null = null;
+
+      if (token) {
+        const userRes = await fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const userData = await userRes.json();
+        if (userData.user) {
+          loggedUser = userData.user;
+          setCurrentUser(userData.user);
+          if (userData.user.mustChangePassword) {
+            setIsMandatoryPasswordChange(true);
+            setIsChangePasswordModalOpen(true);
+          }
+        } else {
+          sessionStorage.removeItem('supporthub_token');
+          setCurrentUser(null);
         }
+      } else {
+        setCurrentUser(null);
       }
 
       // Cities & Links
@@ -107,7 +119,7 @@ export function App() {
       if (statsData.totalResponses !== undefined) setStats(statsData);
 
       // Users List & Audit Logs (if Admin)
-      if (userData.user?.role === 'ADMIN') {
+      if (loggedUser?.role === 'ADMIN') {
         const uRes = await fetch('/api/users');
         const uData = await uRes.json();
         if (Array.isArray(uData)) setUsersList(uData);
@@ -136,7 +148,8 @@ export function App() {
     if (!res.ok) {
       throw new Error(data.error || "Falha na autenticação.");
     }
-    if (data.user) {
+    if (data.user && data.token) {
+      sessionStorage.setItem('supporthub_token', data.token);
       setCurrentUser(data.user);
       setIsLoggedOut(false);
       showToast(`Sessão iniciada como ${data.user.name}!`);
@@ -172,6 +185,7 @@ export function App() {
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
+      sessionStorage.removeItem('supporthub_token');
       setCurrentUser(null);
       setIsLoggedOut(true);
       setIsChangePasswordModalOpen(false);
