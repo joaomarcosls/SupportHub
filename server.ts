@@ -24,6 +24,14 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "2mb" }));
 
+// Middleware de Log de Requisições HTTP (Exibe requisições nos logs do Docker)
+app.use((req, res, next) => {
+  if (req.url.startsWith("/api")) {
+    console.log(`[LOG API ${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+  }
+  next();
+});
+
 // Serve Local Avatars Static Directory
 const publicAvatarsPath = path.join(process.cwd(), "public", "avatars");
 app.use("/avatars", express.static(publicAvatarsPath));
@@ -353,13 +361,13 @@ async function initDatabase() {
 // --- Auth & Session ---
 app.get("/api/auth/me", async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    const authHeader = req.headers.authorization || (req.headers as any).Authorization;
+    if (!authHeader) {
       return res.json({ user: null, activeUserId: "" });
     }
 
-    const token = authHeader.substring(7);
-    const match = token.match(/^jwt_token_([a-f0-9-]+)_\d+$/);
+    const token = String(authHeader).trim().replace(/^Bearer\s+/i, "");
+    const match = token.match(/^jwt_token_([a-zA-Z0-9-]+)/);
     if (!match) {
       return res.json({ user: null, activeUserId: "" });
     }
@@ -498,6 +506,83 @@ app.post("/api/auth/switch-user-id", async (req, res) => {
     res.status(404).json({ error: "Usuário não encontrado." });
   } catch (err: any) {
     res.status(500).json({ error: "Erro ao alterar usuário ativo." });
+  }
+});
+
+app.post("/api/auth/change-password", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || (req.headers as any).Authorization;
+    let targetUserId = activeUserId;
+
+    if (authHeader) {
+      const token = String(authHeader).trim().replace(/^Bearer\s+/i, "");
+      const match = token.match(/^jwt_token_([a-zA-Z0-9-]+)/);
+      if (match) {
+        targetUserId = match[1];
+      }
+    }
+
+    if (!targetUserId) {
+      console.warn("⚠️ Alteração de senha rejeitada: usuário não autenticado (Header ausente ou inválido)");
+      return res.status(401).json({ error: "Sessão inválida ou expirada. Faça login novamente." });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+
+    if (!newPassword) {
+      return res.status(400).json({ error: "A nova senha é obrigatória." });
+    }
+
+    const policyCheck = validatePasswordPolicy(newPassword);
+    if (!policyCheck.isValid) {
+      console.warn(`⚠️ Senha fraca rejeitada: ${policyCheck.error}`);
+      return res.status(400).json({ error: policyCheck.error });
+    }
+
+    const userRes = await query("SELECT * FROM users WHERE id::text = $1", [targetUserId]);
+    const user = userRes.rows[0];
+
+    if (!user) {
+      console.error(`❌ Usuário id ${targetUserId} não encontrado para alterar senha`);
+      return res.status(404).json({ error: "Usuário não encontrado." });
+    }
+
+    // Se informou senha atual, validar com Bcrypt
+    if (currentPassword && user.password_hash) {
+      let isMatch = false;
+      if (user.password_hash.startsWith("$2a$") || user.password_hash.startsWith("$2b$")) {
+        isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+      } else {
+        isMatch = (currentPassword === user.password_hash);
+      }
+
+      if (!isMatch) {
+        console.warn(`⚠️ Senha atual incorreta para o usuário ${user.email}`);
+        return res.status(401).json({ error: "A senha atual informada está incorreta." });
+      }
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 10);
+    const updateRes = await query(
+      `UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id::text = $2 RETURNING *`,
+      [newHash, targetUserId]
+    );
+
+    recordAuditLog({
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      module: "Autenticação",
+      action: "UPDATE",
+      description: `Usuário ${user.name} alterou sua senha de acesso com sucesso com Bcrypt`
+    });
+
+    console.log(`✅ Senha alterada com sucesso no PostgreSQL com Hash Bcrypt para o operador: ${user.email}`);
+
+    res.json({ success: true, user: sanitizeUser(updateRes.rows[0]) });
+  } catch (err: any) {
+    console.error("❌ Erro interno ao alterar senha no server.ts:", err);
+    res.status(500).json({ error: "Erro interno do servidor ao atualizar a senha." });
   }
 });
 
@@ -1284,6 +1369,12 @@ Retorne diretamente o texto pronto da resposta em português do Brasil, sem saud
       details: error?.message || "Erro desconhecido"
     });
   }
+});
+
+// Catch-all 404 Handler para rotas de API (Garante resposta JSON e impede retorno de HTML 404)
+app.use("/api/*", (req, res) => {
+  console.warn(`[404 NOT FOUND] Rota de API não encontrada: ${req.method} ${req.originalUrl}`);
+  res.status(404).json({ error: `Rota de API não encontrada: ${req.method} ${req.originalUrl}` });
 });
 
 // =============================================================================

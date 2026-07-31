@@ -164,12 +164,26 @@ export function App() {
   };
 
   const handleChangePassword = async (newPassword: string, currentPassword?: string) => {
+    const token = sessionStorage.getItem('supporthub_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     const res = await fetch('/api/auth/change-password', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ currentPassword, newPassword })
     });
-    const data = await res.json();
+
+    let data: any = {};
+    const contentType = res.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      data = await res.json();
+    } else {
+      const rawText = await res.text();
+      console.error("Resposta não-JSON do servidor ao alterar senha:", rawText);
+      throw new Error(`Erro no servidor (${res.status}): Não foi possível processar a alteração.`);
+    }
+
     if (!res.ok) {
       throw new Error(data.error || "Erro ao alterar a senha.");
     }
@@ -178,7 +192,7 @@ export function App() {
     }
     setIsChangePasswordModalOpen(false);
     setIsMandatoryPasswordChange(false);
-    showToast("Senha cadastrada com sucesso!");
+    showToast("Senha alterada com sucesso!");
     fetchData();
   };
 
