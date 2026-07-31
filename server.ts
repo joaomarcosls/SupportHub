@@ -43,7 +43,7 @@ async function query(text: string, params?: any[]) {
 }
 
 // Global active session state (simulação de sessão)
-let activeUserId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+let activeUserId = "";
 
 // Helper: Sanitize User (Remove password / password_hash)
 function sanitizeUser(u: any) {
@@ -329,78 +329,18 @@ async function initDatabase() {
       WHERE avatar_url LIKE 'http%' OR avatar_url IS NULL;
     `);
 
-    // SEED INITIAL DATA IF USERS TABLE IS EMPTY
+    // SEED INITIAL ADMIN USER IF USERS TABLE IS EMPTY
     const userCountRes = await query("SELECT COUNT(*) FROM users");
     if (parseInt(userCountRes.rows[0].count, 10) === 0) {
-      console.log("🌱 Populando banco de dados com dados iniciais e Hashes Bcrypt...");
-      
-      // Users com senhas Bcrypt
+      console.log("🌱 Inicializando usuário Administrador principal (admin@empresa.com.br)...");
       await query(`
         INSERT INTO users (id, name, email, password_hash, role, department, active, avatar_url) VALUES
-        ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)', 'admin@empresa.com.br', $1, 'ADMIN', 'Coordenação de TI', TRUE, '/avatars/admin.svg'),
-        ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Mariana Costa (Agente)', 'mariana@empresa.com.br', $2, 'AGENT', 'Suporte N2', TRUE, '/avatars/agent.svg'),
-        ('cccccccc-cccc-cccc-cccc-cccccccccccc', 'Lucas Oliveira (Trainee)', 'lucas@empresa.com.br', $3, 'TRAINEE', 'Suporte N1 (Estágio)', TRUE, '/avatars/trainee.svg')
+        ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)', 'admin@empresa.com.br', $1, 'ADMIN', 'Coordenação de TI', TRUE, '/avatars/admin.svg')
         ON CONFLICT DO NOTHING;
-      `, [adminHash, suporteHash, suporteHash]);
-
-      // Categories
-      await query(`
-        INSERT INTO categories (id, name, slug, color, icon, description) VALUES
-        ('11111111-1111-1111-1111-111111111111', 'Autenticação & Acesso', 'autenticacao-acesso', '#EC4899', 'KeyRound', 'Problemas com senhas, 2FA, permissões e login.'),
-        ('22222222-2222-2222-2222-222222222222', 'Financeiro & Faturamento', 'financeiro-faturamento', '#10B981', 'Receipt', 'Segunda via de boletos, troca de cartão e reembolsos.'),
-        ('33333333-3333-3333-3333-333333333333', 'Infraestrutura & API', 'infraestrutura-api', '#8B5CF6', 'Server', 'Instabilidade no servidor, limites de API e webhooks.'),
-        ('44444444-4444-4444-4444-444444444444', 'Procedimentos Padrão (SOP)', 'procedimentos-padrao', '#F59E0B', 'FileText', 'Scripts de atendimento telefônico, escalonamento N2/N3.')
-        ON CONFLICT DO NOTHING;
-      `);
-
-      // Cities
-      await query(`
-        INSERT INTO cidades (id, name, uf, code_ibge, notes) VALUES
-        ('c1111111-1111-1111-1111-111111111111', 'São Paulo', 'SP', '3550308', 'Requer VPN ativa para acesso aos sistemas internos da prefeitura.'),
-        ('c2222222-2222-2222-2222-222222222222', 'Rio de Janeiro', 'RJ', '3304557', 'Acesso via certificado digital A1 obrigatório.')
-        ON CONFLICT DO NOTHING;
-      `);
-
-      // Links
-      await query(`
-        INSERT INTO sistemas_links (id, city_id, name, url, category, access_notes, is_active) VALUES
-        ('e1111111-1111-1111-1111-111111111111', 'c1111111-1111-1111-1111-111111111111', 'Portal do Contribuinte (ISS)', 'https://tributario.prefeitura.sp.gov.br', 'Sistema Tributário', 'Usar VPN Corporativa', TRUE),
-        ('e2222222-2222-2222-2222-222222222222', 'c1111111-1111-1111-1111-111111111111', 'Portal do Cidadão e Certidões', 'https://cidadao.prefeitura.sp.gov.br', 'Portal do Cidadão', 'IP liberado na rede interna', TRUE)
-        ON CONFLICT DO NOTHING;
-      `);
-
-      // Canned Responses
-      await query(`
-        INSERT INTO canned_responses (id, title, shortcut, category_id, body, variables, usage_count, created_by) VALUES
-        ('f1111111-1111-1111-1111-111111111111', 'Redefinição de Senha e Token de Acesso', '/reset-senha', '11111111-1111-1111-1111-111111111111', 
-        'Olá {{nome_cliente}}, tudo bem?\n\nRecebemos sua solicitação para redefinição de acesso no sistema {{sistema}}.\n\nPara cadastrar sua nova senha com segurança, acesse o link abaixo (válido por 2 horas):\n👉 {{link_redefinicao}}\n\nCaso não tenha solicitado essa alteração, por favor ignore este e-mail.\n\nAtenciosamente,\n{{nome_agente}} - Equipe de Suporte Técnico',
-        '[{"key": "nome_cliente", "label": "Nome do Cliente", "defaultValue": "Cliente"}, {"key": "sistema", "label": "Sistema/Módulo", "defaultValue": "ERP Cloud"}, {"key": "link_redefinicao", "label": "Link de Redefinição", "defaultValue": "https://app.empresa.com.br/reset?token=xyz123"}, {"key": "nome_agente", "label": "Nome do Operador", "defaultValue": "Suporte"}]'::jsonb, 142, 'Carlos Silva (Admin)'),
-        
-        ('f2222222-2222-2222-2222-222222222222', 'Envio de 2ª Via de Boleto / Fatura', '/boleto', '22222222-2222-2222-2222-222222222222',
-        'Prezado(a) {{nome_cliente}},\n\nConforme solicitado, segue o link para acesso e cópia da linha digitável da fatura com vencimento em {{data_vencimento}}:\n\n📌 Linha Digitável: {{codigo_barras}}\n📄 Link do PDF: {{link_boleto}}\n\nLembramos que pagamentos via PIX são compensados em até 5 minutos!\n\nQualquer dúvida, estamos à disposição.\nAtenciosamente,\n{{nome_agente}} - Financeiro e Suporte',
-        '[{"key": "nome_cliente", "label": "Nome do Cliente", "defaultValue": "Cliente"}, {"key": "data_vencimento", "label": "Data Vencimento", "defaultValue": "10/08/2026"}, {"key": "codigo_barras", "label": "Código PIX/Boleto", "defaultValue": "00190.00009 01234.567809 90000.123457 1 9000000015000"}, {"key": "link_boleto", "label": "URL do PDF", "defaultValue": "https://fatura.empresa.com.br/pdf/8849"}, {"key": "nome_agente", "label": "Nome do Agente", "defaultValue": "Suporte"}]'::jsonb, 98, 'Mariana Costa (Agente)')
-        ON CONFLICT DO NOTHING;
-      `);
-
-      // Knowledge Articles
-      await query(`
-        INSERT INTO knowledge_articles (id, title, slug, category_id, content_md, tags, views_count, helpful_count, author_id, author_name) VALUES
-        ('a1111111-1111-1111-1111-111111111111', 'Guia de Resolução: Erro 401 Unauthorized na API', 'guia-erro-401-api', '33333333-3333-3333-3333-333333333333',
-        '# Guia de Resolução: Erro 401 Unauthorized na API\n\nO erro \`401 Unauthorized\` ocorre quando o cliente tenta acessar um endpoint protegido sem enviar um token de autenticação válido ou quando o token expirou.\n\n---\n\n### 🔍 Passo a Passo para Diagnóstico (Troubleshooting)\n\n1. **Verifique se o Header Bearer está sendo enviado corretamente:**\n   \`\`\`bash\n   curl -X GET "https://api.empresa.com.br/v1/pedidos" \\\n     -H "Authorization: Bearer <SEU_JWT_TOKEN>"\n   \`\`\`\n\n2. **Validar expiração do Token JWT:**\n   - Acesse o [jwt.io](https://jwt.io) para decodificar o payload.\n   - Verifique o campo \`exp\` (timestamp UNIX). Se for menor que a hora atual UTC, solicite a renovação via endpoint \`/api/auth/refresh\`.\n\n3. **Verificar IP na Whitelist (Se aplicável):**\n   - Clientes Enterprise possuem trava de IP de origem. Verifique no painel Admin se o IP do servidor do cliente consta na lista liberada.',
-        '["API", "JWT", "Erro 401", "Integração"]'::jsonb, 320, 45, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)')
-        ON CONFLICT DO NOTHING;
-      `);
-
-      // Audit Log Seed
-      await query(`
-        INSERT INTO historico_auditoria (id, user_id, user_name, user_role, module, action, description, details) VALUES
-        ('a1111111-2222-3333-4444-555555555555', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'Carlos Silva (Admin)', 'ADMIN', 'Cidades', 'CREATE', 'Cadastrou a cidade São Paulo - SP', '{"city": "São Paulo", "uf": "SP", "codeIBGE": "3550308"}'::jsonb),
-        ('a2222222-3333-4444-5555-666666666666', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'Mariana Costa (Agente)', 'AGENT', 'Links', 'CREATE', 'Vinculou o sistema Portal do Contribuinte à cidade São Paulo', '{"link": "Portal do Contribuinte (ISS)", "url": "https://tributario.prefeitura.sp.gov.br"}'::jsonb)
-        ON CONFLICT DO NOTHING;
-      `);
+      `, [adminHash]);
     }
 
-    console.log("✅ Banco de dados PostgreSQL sincronizado com Hashes Bcrypt e Avatares Locais!");
+    console.log("✅ Banco de dados PostgreSQL limpo, pronto para novas inserções!");
   } catch (err) {
     console.error("❌ Erro ao inicializar o banco de dados PostgreSQL:", err);
   }

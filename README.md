@@ -115,7 +115,7 @@ docker compose up -d --build
 
 | Serviço | Endereço / URL | Descrição |
 | :--- | :--- | :--- |
-| **Aplicação Web** | **[http://localhost](http://localhost)** | Interface gráfica do sistema |
+| **Aplicação Web** | **[http://localhost:8383](http://localhost:8383)** | Interface gráfica do sistema |
 | **API Backend** | `http://localhost:3000` | Servidor Express / REST API |
 | **PostgreSQL** | `localhost:5435` | Banco de Dados Relacional |
 

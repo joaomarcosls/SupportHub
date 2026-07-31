@@ -55,7 +55,7 @@ services:
     container_name: supporthub_frontend
     restart: always
     ports:
-      - "80:80"
+      - "8383:80"
     depends_on:
       - backend
 

@@ -34,16 +34,7 @@ export function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Global State
-  const [currentUser, setCurrentUser] = useState<User | null>({
-    id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-    name: "Carlos Silva",
-    email: "admin@empresa.com.br",
-    role: "ADMIN",
-    department: "Coordenação de TI",
-    active: true,
-    avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-    createdAt: new Date().toISOString()
-  });
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   const [cities, setCities] = useState<City[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
