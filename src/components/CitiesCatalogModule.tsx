@@ -387,7 +387,7 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
                         <h2 className="text-base font-bold text-slate-100">{city.name} - {city.uf}</h2>
                         {city.codeIBGE && (
                           <span className="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded border border-slate-700">
-                            IBGE: {city.codeIBGE}
+                            Código da Cidade: {city.codeIBGE}
                           </span>
                         )}
                       </div>
@@ -613,12 +613,12 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-300">Código IBGE (Opcional)</label>
+                <label className="text-xs font-medium text-slate-300">Código da Cidade (Opcional)</label>
                 <input
                   type="text"
                   value={cityIbge}
                   onChange={(e) => setCityIbge(e.target.value)}
-                  placeholder="Ex: 3550308"
+                  placeholder="Ex: 247990"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-mono"
                 />
               </div>
