@@ -1,20 +1,33 @@
-# Build stage
+# Frontend Dockerfile - Git Clone Automático durante a compilação
 FROM node:20-alpine AS builder
+
+# Parâmetros de build para clonar o repositório
+ARG REPO_URL=https://github.com/joaomarcosls/SupportHub.git
+ARG BRANCH_VERSION=main
+ARG GIT_AUTH_TOKEN=""
+
+# Instalar o git no container do builder
+RUN apk add --no-cache git
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm install
+# Clonar o repositório diretamente do GitHub
+RUN if [ -n "$GIT_AUTH_TOKEN" ]; then \
+        git clone https://${GIT_AUTH_TOKEN}:x-oauth-basic@${REPO_URL#https://} --branch ${BRANCH_VERSION} . ; \
+    else \
+        git clone ${REPO_URL} --branch ${BRANCH_VERSION} . ; \
+    fi
 
-COPY . .
+# Instalar dependências e realizar a compilação do React SPA
+RUN npm install
 RUN npm run build
 
-# Nginx production web server
+# Estágio Final de Produção - Servidor Nginx
 FROM nginx:alpine AS runner
 
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/docker/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy build artifacts to Nginx html folder
+# Copiar os arquivos estáticos compilados para a pasta raiz do Nginx
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80

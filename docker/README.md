@@ -1,37 +1,44 @@
-# 🐳 Docker Deployment - SupportHub
+# 🐳 Docker Deployment com Git Clone Automático - SupportHub
 
-Esta pasta reúne todos os arquivos de configuração do **Docker** e **Docker Compose** organizados de forma independente.
-
----
-
-## 📂 Arquivos Incluídos
-
-* `docker-compose.yml`: Orquestração dos containers (PostgreSQL 16, Backend Express e Frontend Nginx).
-* `Dockerfile.backend`: Build do servidor Node.js com TypeScript e Criptografia Bcrypt.
-* `Dockerfile.frontend`: Build da interface React 19 + Vite com servidor de produção Nginx.
-* `nginx.conf`: Configuração do proxy reverso para rotas da API (`/api/`) e avatares (`/avatars/`).
-* `deploy.sh`: Script executável para deploy automatizado em 1 clique.
+Esta pasta reúne os arquivos de configuração do **Docker** projetados para baixar automaticamente o código-fonte diretamente do GitHub durante o processo de `docker build`.
 
 ---
 
-## 🚀 Como Executar o Sistema Usando Esta Pasta
+## 🛠️ Como Funciona o Git Clone Automático nos Dockerfiles
 
-### Opção 1: Executando a partir da Raiz do Projeto (Recomendado)
+Durante a construção da imagem, o `Dockerfile.backend` e o `Dockerfile.frontend` executam o download do repositório via `git clone`, permitindo que o container seja compilado de forma 100% autônoma em qualquer servidor.
+
+### Argumentos Suportados (`ARG` / `ENV`):
+
+* `REPO_URL`: URL do repositório GitHub (Padrão: `https://github.com/joaomarcosls/SupportHub.git`).
+* `BRANCH_VERSION`: Branch a ser clonada (Padrão: `main`).
+* `GIT_AUTH_TOKEN`: Token de autenticação GitHub (Opcional, para repositórios privados).
+
+---
+
+## 📋 Exemplo de Sintaxe nos Dockerfiles
+
+```dockerfile
+# Clonar o repositório diretamente do GitHub no container de Build
+RUN if [ -n "$GIT_AUTH_TOKEN" ]; then \
+        git clone https://${GIT_AUTH_TOKEN}:x-oauth-basic@${REPO_URL#https://} --branch ${BRANCH_VERSION} . ; \
+    else \
+        git clone ${REPO_URL} --branch ${BRANCH_VERSION} . ; \
+    fi
+```
+
+---
+
+## 🚀 Como Executar no Servidor
+
+### 1. Build Padrão (Repositório Público na Branch `main`):
 ```bash
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
-### Opção 2: Usando o Script Automático `deploy.sh`
+### 2. Build com Token de Acesso Privado ou Outra Branch:
 ```bash
-chmod +x docker/deploy.sh
-./docker/deploy.sh
-```
-
----
-
-## 🛑 Como Encerrar os Containers
-```bash
-docker compose -f docker/docker-compose.yml down
+GIT_AUTH_TOKEN="seu_token_github" BRANCH_VERSION="main" docker compose -f docker/docker-compose.yml up -d --build
 ```
 
 ---

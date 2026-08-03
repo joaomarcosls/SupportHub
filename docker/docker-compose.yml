@@ -22,12 +22,16 @@ services:
       retries: 5
 
   # ---------------------------------------------------------------------------
-  # 2. Servidor Backend RESTful API - Node.js Express
+  # 2. Servidor Backend RESTful API - Node.js Express (Build via Git Clone)
   # ---------------------------------------------------------------------------
   backend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.backend
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        REPO_URL: ${REPO_URL:-https://github.com/joaomarcosls/SupportHub.git}
+        BRANCH_VERSION: ${BRANCH_VERSION:-main}
+        GIT_AUTH_TOKEN: ${GIT_AUTH_TOKEN:-}
     container_name: supporthub_backend
     restart: always
     environment:
@@ -46,12 +50,16 @@ services:
       - "3000"
 
   # ---------------------------------------------------------------------------
-  # 3. Interface Frontend - React + Vite + Nginx Reverse Proxy
+  # 3. Interface Frontend - React + Nginx (Build via Git Clone)
   # ---------------------------------------------------------------------------
   frontend:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile.frontend
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        REPO_URL: ${REPO_URL:-https://github.com/joaomarcosls/SupportHub.git}
+        BRANCH_VERSION: ${BRANCH_VERSION:-main}
+        GIT_AUTH_TOKEN: ${GIT_AUTH_TOKEN:-}
     container_name: supporthub_frontend
     restart: always
     ports:
