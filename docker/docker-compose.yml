@@ -1,0 +1,68 @@
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Banco de Dados Relacional - PostgreSQL
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: supporthub_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-supporthub_db}
+      POSTGRES_USER: ${POSTGRES_USER:-supporthub_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SupporthubSecure2026!Pass}
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../schema.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-supporthub_user} -d ${POSTGRES_DB:-supporthub_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # 2. Servidor Backend RESTful API - Node.js Express
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: supporthub_backend
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-supporthub_db}
+      POSTGRES_USER: ${POSTGRES_USER:-supporthub_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SupporthubSecure2026!Pass}
+      JWT_SECRET: ${JWT_SECRET:-super_secret_jwt_key_supporthub_2026}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  # ---------------------------------------------------------------------------
+  # 3. Interface Frontend - React + Vite + Nginx Reverse Proxy
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    container_name: supporthub_frontend
+    restart: always
+    ports:
+      - "8383:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  default:
+    name: supporthub_network
