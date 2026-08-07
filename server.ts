@@ -367,8 +367,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.0.7",
-    rawVersion: "1.0.7",
+    version: "v1.0.8",
+    rawVersion: "1.0.8",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -1449,6 +1449,18 @@ app.post("/api/admin/system/update", async (req, res) => {
     const execAsync = promisify(exec);
 
     console.log(`🚀 [ADMIN UPDATE] Iniciando atualização do sistema solicitada por ${currentRes.rows[0].name}...`);
+
+    // Auto-recuperação: Instalar git via apk caso o container atual não o tenha instalado
+    try {
+      await execAsync("git --version");
+    } catch (e) {
+      console.log("⚠️ Git não encontrado no container. Instalando git em tempo de execução...");
+      try {
+        await execAsync("apk add --no-cache git");
+      } catch (apkErr) {
+        console.error("Falha ao instalar git via apk:", apkErr);
+      }
+    }
 
     const { stdout } = await execAsync("git config --global --add safe.directory '*' && git pull origin main");
     console.log("[ADMIN UPDATE RESULT]:", stdout);
