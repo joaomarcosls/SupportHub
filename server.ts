@@ -367,8 +367,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.0.8",
-    rawVersion: "1.0.8",
+    version: "v1.0.9",
+    rawVersion: "1.0.9",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -918,11 +918,9 @@ app.put("/api/categories/:id", async (req, res) => {
 
     const newName = updateRes.rows[0].name;
 
-    // Atualização relacional em cascata em todos os links de sistemas, modelos e artigos vinculados
+    // Atualização relacional em cascata em todos os links de sistemas vinculados (canned_responses e kb_articles usam UUID category_id)
     if (oldName && newName && oldName !== newName) {
       await query("UPDATE sistemas_links SET category = $1 WHERE category = $2", [newName, oldName]);
-      await query("UPDATE canned_responses SET category = $1 WHERE category = $2", [newName, oldName]);
-      await query("UPDATE kb_articles SET category = $1 WHERE category = $2", [newName, oldName]);
       
       recordAuditLog({
         module: "Categorias",
@@ -934,34 +932,58 @@ app.put("/api/categories/:id", async (req, res) => {
     res.json(updateRes.rows[0]);
   } catch (err: any) {
     console.error("Erro ao atualizar categoria:", err);
-    res.status(500).json({ error: "Erro ao atualizar categoria." });
+    res.status(500).json({ error: "Erro ao atualizar categoria: " + (err?.message || "Erro interno") });
   }
 });
 
 app.delete("/api/categories/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const catRes = await query("SELECT name FROM categories WHERE id::text = $1", [id]);
+    const catRes = await query("SELECT id, name FROM categories WHERE id::text = $1", [id]);
     const catName = catRes.rows[0]?.name;
 
-    if (catName) {
-      await query("UPDATE sistemas_links SET category = 'Outros' WHERE category = $1", [catName]);
-      await query("UPDATE canned_responses SET category = 'Outros' WHERE category = $1", [catName]);
-      await query("UPDATE kb_articles SET category = 'Outros' WHERE category = $1", [catName]);
-      
-      await query("DELETE FROM categories WHERE id::text = $1", [id]);
-
-      recordAuditLog({
-        module: "Categorias",
-        action: "DELETE",
-        description: `Excluiu a categoria '${catName}' e reatribuiu itens para 'Outros'`
-      });
+    if (!catName) {
+      return res.status(404).json({ error: "Categoria não encontrada para exclusão." });
     }
 
-    res.json({ success: true });
+    // Buscar ou criar categoria padrão 'Outros' para reatribuição
+    let outrosRes = await query("SELECT id FROM categories WHERE name = 'Outros' OR slug = 'outros' LIMIT 1");
+    let outrosId = outrosRes.rows[0]?.id;
+
+    if (!outrosId) {
+      const newOutros = await query(
+        `INSERT INTO categories (id, name, slug, color, icon, description)
+         VALUES ($1, 'Outros', 'outros', '#64748B', 'Folder', 'Categoria padrão para itens sem categoria específica')
+         ON CONFLICT (slug) DO UPDATE SET name = 'Outros'
+         RETURNING id`,
+        [crypto.randomUUID()]
+      );
+      outrosId = newOutros.rows[0]?.id;
+    }
+
+    // Prevenir exclusão da própria categoria padrão 'Outros'
+    if (id === outrosId || catName.toLowerCase() === 'outros') {
+      return res.status(400).json({ error: "A categoria padrão 'Outros' não pode ser excluída pois é usada como reserva do sistema." });
+    }
+
+    // Reatribuir links, modelos e artigos antes da exclusão
+    await query("UPDATE sistemas_links SET category = 'Outros' WHERE category = $1", [catName]);
+    await query("UPDATE canned_responses SET category_id = $1 WHERE category_id::text = $2", [outrosId, id]);
+    await query("UPDATE kb_articles SET category_id = $1 WHERE category_id::text = $2", [outrosId, id]);
+
+    // Excluir a categoria
+    await query("DELETE FROM categories WHERE id::text = $1", [id]);
+
+    recordAuditLog({
+      module: "Categorias",
+      action: "DELETE",
+      description: `Excluiu a categoria '${catName}' e reatribuiu itens vinculados para 'Outros'`
+    });
+
+    res.json({ success: true, message: `Categoria '${catName}' excluída com sucesso.` });
   } catch (err: any) {
     console.error("Erro ao excluir categoria:", err);
-    res.status(500).json({ error: "Erro ao excluir categoria." });
+    res.status(500).json({ error: "Erro ao excluir categoria: " + (err?.message || "Erro de banco de dados") });
   }
 });
 

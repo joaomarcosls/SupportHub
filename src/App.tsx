@@ -21,7 +21,7 @@ import { UserManagementModule } from './components/UserManagementModule';
 import { AuditTrailModule } from './components/AuditTrailModule';
 import { LoginScreen } from './components/LoginScreen';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
-import { Check } from 'lucide-react';
+import { Check, AlertCircle, ShieldAlert } from 'lucide-react';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<MainTab>('cities-catalog');
@@ -31,7 +31,10 @@ export function App() {
   const [isMandatoryPasswordChange, setIsMandatoryPasswordChange] = useState<boolean>(false);
 
   // Toast notification state
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastNotification, setToastNotification] = useState<{
+    message: string;
+    type: 'success' | 'error' | 'warning';
+  } | null>(null);
 
   // Global State
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -54,9 +57,9 @@ export function App() {
     totalCopies: 0
   });
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+  const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
+    setToastNotification({ message, type });
+    setTimeout(() => setToastNotification(null), 4500);
   };
 
   // 1. Initial Load of API Data
@@ -247,7 +250,7 @@ export function App() {
     }
   };
 
-  // 3. Cities & Links Actions
+  // 3. City Actions
   const handleCreateCity = async (cityData: Partial<City>) => {
     try {
       const res = await fetch('/api/cities', {
@@ -256,14 +259,14 @@ export function App() {
         body: JSON.stringify(cityData)
       });
       if (res.ok) {
-        showToast("Nova cidade cadastrada com sucesso!");
+        showToast("Nova cidade cadastrada no catálogo!", 'success');
         fetchData();
       } else {
-        const err = await res.json();
-        alert(err.error || "Erro ao cadastrar cidade.");
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao cadastrar cidade.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao cadastrar cidade.", 'error');
     }
   };
 
@@ -275,11 +278,14 @@ export function App() {
         body: JSON.stringify(updated)
       });
       if (res.ok) {
-        showToast("Dados da cidade atualizados!");
+        showToast("Dados da cidade atualizados com sucesso!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao atualizar cidade.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao atualizar cidade.", 'error');
     }
   };
 
@@ -287,11 +293,14 @@ export function App() {
     try {
       const res = await fetch(`/api/cities/${id}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast("Cidade excluída.");
+        showToast("Cidade excluída.", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao excluir cidade.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao excluir cidade.", 'error');
     }
   };
 
@@ -303,11 +312,14 @@ export function App() {
         body: JSON.stringify(linkData)
       });
       if (res.ok) {
-        showToast("Novo sistema vinculado à cidade!");
+        showToast("Novo sistema vinculado à cidade!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao vincular sistema.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao vincular sistema.", 'error');
     }
   };
 
@@ -319,11 +331,14 @@ export function App() {
         body: JSON.stringify(updated)
       });
       if (res.ok) {
-        showToast("Link do sistema atualizado!");
+        showToast("Link do sistema atualizado!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao atualizar link.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao atualizar link.", 'error');
     }
   };
 
@@ -331,11 +346,14 @@ export function App() {
     try {
       const res = await fetch(`/api/cities/links/${linkId}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast("Link removido.");
+        showToast("Link removido.", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao remover link.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao remover link.", 'error');
     }
   };
 
@@ -343,13 +361,13 @@ export function App() {
   const handleCopyResponse = async (id: string, textToCopy: string) => {
     try {
       await navigator.clipboard.writeText(textToCopy);
-      showToast("Copiado com 1 clique para a área de transferência!");
+      showToast("Copiado com 1 clique para a área de transferência!", 'success');
 
       // Update usage count in API
       await fetch(`/api/canned-responses/${id}/copy`, { method: 'POST' });
       fetchData();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro ao copiar para a área de transferência.", 'error');
     }
   };
 
@@ -362,14 +380,14 @@ export function App() {
         body: JSON.stringify(newResp)
       });
       if (res.ok) {
-        showToast("Novo modelo de resposta criado!");
+        showToast("Novo modelo de resposta criado!", 'success');
         fetchData();
       } else {
-        const err = await res.json();
-        alert(err.error || "Erro ao criar modelo.");
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao criar modelo.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao criar modelo.", 'error');
     }
   };
 
@@ -382,22 +400,30 @@ export function App() {
         body: JSON.stringify(updated)
       });
       if (res.ok) {
-        showToast("Modelo atualizado com sucesso!");
+        showToast("Modelo atualizado com sucesso!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao atualizar modelo.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao atualizar modelo.", 'error');
     }
   };
 
   // Delete Response
   const handleDeleteResponse = async (id: string) => {
     try {
-      await fetch(`/api/canned-responses/${id}`, { method: 'DELETE' });
-      showToast("Modelo excluído.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      const res = await fetch(`/api/canned-responses/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast("Modelo excluído.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao excluir modelo.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao excluir modelo.", 'error');
     }
   };
 
@@ -410,35 +436,48 @@ export function App() {
         body: JSON.stringify(newArt)
       });
       if (res.ok) {
-        showToast("Novo artigo publicado na Wiki!");
+        showToast("Novo artigo publicado na Wiki!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao publicar artigo.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao publicar artigo.", 'error');
     }
   };
 
   const handleUpdateArticle = async (id: string, updated: Partial<KnowledgeArticle>) => {
     try {
-      await fetch(`/api/kb/articles/${id}`, {
+      const res = await fetch(`/api/kb/articles/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
-      showToast("Artigo atualizado.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      if (res.ok) {
+        showToast("Artigo atualizado.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao atualizar artigo.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao atualizar artigo.", 'error');
     }
   };
 
   const handleDeleteArticle = async (id: string) => {
     try {
-      await fetch(`/api/kb/articles/${id}`, { method: 'DELETE' });
-      showToast("Artigo removido da wiki.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      const res = await fetch(`/api/kb/articles/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast("Artigo removido da wiki.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao remover artigo.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao remover artigo.", 'error');
     }
   };
 
@@ -454,7 +493,7 @@ export function App() {
       if (data.lastSavedAt) {
         setScratchpadLastSaved(data.lastSavedAt);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
     }
   };
@@ -468,35 +507,48 @@ export function App() {
         body: JSON.stringify(cat)
       });
       if (res.ok) {
-        showToast("Nova categoria cadastrada!");
+        showToast("Nova categoria cadastrada!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao cadastrar categoria.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao cadastrar categoria.", 'error');
     }
   };
 
   const handleUpdateCategory = async (id: string, updated: Partial<Category>) => {
     try {
-      await fetch(`/api/categories/${id}`, {
+      const res = await fetch(`/api/categories/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
-      showToast("Categoria atualizada.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      if (res.ok) {
+        showToast("Categoria atualizada.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao atualizar categoria.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao atualizar categoria.", 'error');
     }
   };
 
   const handleDeleteCategory = async (id: string) => {
     try {
-      await fetch(`/api/categories/${id}`, { method: 'DELETE' });
-      showToast("Categoria removida.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      const res = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast("Categoria removida com sucesso.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao remover categoria.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao remover categoria.", 'error');
     }
   };
 
@@ -509,35 +561,48 @@ export function App() {
         body: JSON.stringify(usr)
       });
       if (res.ok) {
-        showToast("Operador cadastrado no sistema!");
+        showToast("Operador cadastrado no sistema!", 'success');
         fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao cadastrar operador.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao cadastrar operador.", 'error');
     }
   };
 
   const handleUpdateUser = async (id: string, updated: Partial<User>) => {
     try {
-      await fetch(`/api/users/${id}`, {
+      const res = await fetch(`/api/users/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated)
       });
-      showToast("Dados do operador atualizados.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      if (res.ok) {
+        showToast("Dados do operador atualizados.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao atualizar operador.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao atualizar operador.", 'error');
     }
   };
 
   const handleToggleUserStatus = async (id: string) => {
     try {
-      await fetch(`/api/users/${id}/toggle-status`, { method: 'PATCH' });
-      showToast("Status de acesso alterado.");
-      fetchData();
-    } catch (err) {
-      console.error(err);
+      const res = await fetch(`/api/users/${id}/toggle-status`, { method: 'PATCH' });
+      if (res.ok) {
+        showToast("Status de acesso alterado.", 'success');
+        fetchData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao alterar status do operador.", 'error');
+      }
+    } catch (err: any) {
+      showToast("Erro de conexão ao alterar status.", 'error');
     }
   };
 
@@ -546,14 +611,14 @@ export function App() {
     try {
       const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
       if (res.ok) {
-        showToast("Operador excluído com sucesso.");
+        showToast("Operador excluído com sucesso.", 'success');
         fetchData();
       } else {
-        const err = await res.json();
-        alert(err.error || "Erro ao excluir operador.");
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || "Erro ao excluir operador.", 'error');
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      showToast("Erro de conexão ao excluir operador.", 'error');
     }
   };
 
@@ -568,14 +633,6 @@ export function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-blue-600 selection:text-white flex flex-col antialiased">
       
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 bg-blue-600 text-white px-4 py-2.5 rounded-xl shadow-2xl font-bold text-xs flex items-center gap-2 border border-blue-400/40 animate-in slide-in-from-bottom-5 duration-200">
-          <Check className="w-4 h-4 text-emerald-300" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
       {/* Top Navigation Bar */}
       <Navbar
         activeTab={activeTab}
@@ -688,6 +745,28 @@ export function App() {
           />
         )}
       </main>
+
+      {/* Toast Notification Banner System-Wide */}
+      {toastNotification && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl backdrop-blur-md border animate-in slide-in-from-bottom-5 duration-300 max-w-md bg-slate-900 border-slate-700">
+          {toastNotification.type === 'success' && (
+            <div className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 p-1.5 rounded-lg shrink-0">
+              <Check className="w-5 h-5 text-emerald-400" />
+            </div>
+          )}
+          {toastNotification.type === 'error' && (
+            <div className="bg-rose-500/20 text-rose-300 border border-rose-500/40 p-1.5 rounded-lg shrink-0">
+              <AlertCircle className="w-5 h-5 text-rose-400" />
+            </div>
+          )}
+          {toastNotification.type === 'warning' && (
+            <div className="bg-amber-500/20 text-amber-300 border border-amber-500/40 p-1.5 rounded-lg shrink-0">
+              <ShieldAlert className="w-5 h-5 text-amber-400" />
+            </div>
+          )}
+          <span className="text-xs font-semibold text-slate-100">{toastNotification.message}</span>
+        </div>
+      )}
 
       {/* Footer with Developer Credits */}
       <footer className="border-t border-slate-800/80 bg-slate-950 py-4 px-6 text-center text-xs text-slate-500 mt-auto">
