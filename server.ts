@@ -361,8 +361,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.0.5",
-    rawVersion: "1.0.5",
+    version: "v1.0.6",
+    rawVersion: "1.0.6",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -1442,7 +1442,7 @@ app.post("/api/admin/system/update", async (req, res) => {
 
     console.log(`🚀 [ADMIN UPDATE] Iniciando atualização do sistema solicitada por ${currentRes.rows[0].name}...`);
 
-    const { stdout } = await execAsync("git pull origin main");
+    const { stdout } = await execAsync("git config --global --add safe.directory '*' && git pull origin main");
     console.log("[ADMIN UPDATE RESULT]:", stdout);
 
     recordAuditLog({
