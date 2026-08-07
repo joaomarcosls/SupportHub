@@ -1,4 +1,4 @@
-name: SupportHub CI/CD & Build Validation
+name: SupportHub CI/CD & Automated Unit Testing
 
 on:
   push:
@@ -8,8 +8,8 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-and-test:
-    name: Build & Code Validation
+  test-and-validate:
+    name: 🧪 Unit Tests & Code Validation
     runs-on: ubuntu-latest
 
     steps:
@@ -25,10 +25,16 @@ jobs:
       - name: 📦 Instalar Dependências
         run: npm ci
 
+      - name: 🧪 Executar Suíte de Testes Unitários (Segurança & Autenticação)
+        run: npm run test
+
+      - name: 🔍 Checagem Estática de Tipagem (TypeScript Typecheck)
+        run: npm run typecheck
+
       - name: ⚙️ Executar Build de Produção (Vite + Server Esbuild)
         run: npm run build
 
-      - name: 🐳 Validar Sintaxe do Docker Compose e Dockerfiles
+      - name: 🐳 Validar Sintaxe e Build dos Containers Docker
         run: |
           docker compose -f docker/docker-compose.yml config
           docker build -t supporthub-backend-test -f docker/Dockerfile.backend .
