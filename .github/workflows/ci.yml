@@ -1,0 +1,35 @@
+name: SupportHub CI/CD & Build Validation
+
+on:
+  push:
+    branches: [ "main" ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build & Code Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout do Código Fonte
+        uses: actions/checkout@v4
+
+      - name: 🟢 Configurar Node.js (v20)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: 📦 Instalar Dependências
+        run: npm ci
+
+      - name: ⚙️ Executar Build de Produção (Vite + Server Esbuild)
+        run: npm run build
+
+      - name: 🐳 Validar Sintaxe do Docker Compose e Dockerfiles
+        run: |
+          docker compose -f docker/docker-compose.yml config
+          docker build -t supporthub-backend-test -f docker/Dockerfile.backend .
+          docker build -t supporthub-frontend-test -f docker/Dockerfile.frontend .
