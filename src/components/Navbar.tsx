@@ -72,6 +72,36 @@ export const Navbar: React.FC<NavbarProps> = ({
     checkGitHubRelease();
   }, []);
 
+  const [isUpdatingSystem, setIsUpdatingSystem] = useState(false);
+
+  const handleAdminSystemUpdate = async () => {
+    if (!isAdmin) return;
+    if (!confirm(`Deseja atualizar o SupportHub para a versão ${latestVersion} a partir do GitHub agora?`)) return;
+
+    try {
+      setIsUpdatingSystem(true);
+      const token = sessionStorage.getItem('supporthub_token');
+      const res = await fetch('/api/admin/system/update', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`✅ ${data.message || 'Sistema atualizado com sucesso!'}\n\nA página será recarregada.`);
+        window.location.reload();
+      } else {
+        alert(`⚠️ ${data.error || 'Erro ao realizar atualização.'}\n${data.details || ''}`);
+      }
+    } catch (err: any) {
+      alert("⚠️ Erro de conexão ao tentar atualizar o sistema.");
+    } finally {
+      setIsUpdatingSystem(false);
+    }
+  };
+
   return (
     <>
       {/* Banner de Notificação de Nova Versão do GitHub */}
@@ -82,15 +112,30 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Sparkles className="w-4 h-4 text-slate-950 fill-current animate-bounce" />
               <span>Nova versão <strong>{latestVersion}</strong> do SupportHub disponível no GitHub!</span>
             </span>
-            <a
-              href={releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 bg-slate-950 hover:bg-slate-900 text-white px-2.5 py-0.5 rounded text-[11px] font-bold shadow transition-all border border-amber-400/40"
-            >
-              <span>Ver Release & Baixar</span>
-              <Download className="w-3 h-3" />
-            </a>
+            
+            <div className="flex items-center gap-2">
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={handleAdminSystemUpdate}
+                  disabled={isUpdatingSystem}
+                  className="inline-flex items-center gap-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-300 px-2.5 py-0.5 rounded text-[11px] font-bold shadow transition-all border border-emerald-500/40 disabled:opacity-50"
+                >
+                  <Zap className="w-3 h-3 text-emerald-400 fill-current" />
+                  <span>{isUpdatingSystem ? 'Atualizando...' : 'Atualizar Sistema em 1 Clique'}</span>
+                </button>
+              )}
+
+              <a
+                href={releaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 bg-slate-950 hover:bg-slate-900 text-white px-2.5 py-0.5 rounded text-[11px] font-bold shadow transition-all border border-amber-400/40"
+              >
+                <span>Ver Release</span>
+                <Download className="w-3 h-3" />
+              </a>
+            </div>
           </div>
         </div>
       )}

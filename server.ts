@@ -877,6 +877,11 @@ app.put("/api/categories/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { name, color, icon, description } = req.body;
+
+    // Buscar o nome antigo da categoria antes da atualização para propagação relacional
+    const oldCatRes = await query("SELECT name FROM categories WHERE id::text = $1", [id]);
+    const oldName = oldCatRes.rows[0]?.name;
+
     const slug = name ? String(name).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-") : null;
 
     const updateRes = await query(
@@ -894,8 +899,24 @@ app.put("/api/categories/:id", async (req, res) => {
 
     if (updateRes.rows.length === 0) return res.status(404).json({ error: "Categoria não encontrada." });
 
+    const newName = updateRes.rows[0].name;
+
+    // Atualização relacional em cascata em todos os links de sistemas, modelos e artigos vinculados
+    if (oldName && newName && oldName !== newName) {
+      await query("UPDATE sistemas_links SET category = $1 WHERE category = $2", [newName, oldName]);
+      await query("UPDATE canned_responses SET category = $1 WHERE category = $2", [newName, oldName]);
+      await query("UPDATE kb_articles SET category = $1 WHERE category = $2", [newName, oldName]);
+      
+      recordAuditLog({
+        module: "Categorias",
+        action: "UPDATE",
+        description: `Renomeou a categoria de '${oldName}' para '${newName}' com sincronização relacional em cascata`
+      });
+    }
+
     res.json(updateRes.rows[0]);
   } catch (err: any) {
+    console.error("Erro ao atualizar categoria:", err);
     res.status(500).json({ error: "Erro ao atualizar categoria." });
   }
 });
@@ -903,9 +924,26 @@ app.put("/api/categories/:id", async (req, res) => {
 app.delete("/api/categories/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    await query("DELETE FROM categories WHERE id::text = $1", [id]);
+    const catRes = await query("SELECT name FROM categories WHERE id::text = $1", [id]);
+    const catName = catRes.rows[0]?.name;
+
+    if (catName) {
+      await query("UPDATE sistemas_links SET category = 'Outros' WHERE category = $1", [catName]);
+      await query("UPDATE canned_responses SET category = 'Outros' WHERE category = $1", [catName]);
+      await query("UPDATE kb_articles SET category = 'Outros' WHERE category = $1", [catName]);
+      
+      await query("DELETE FROM categories WHERE id::text = $1", [id]);
+
+      recordAuditLog({
+        module: "Categorias",
+        action: "DELETE",
+        description: `Excluiu a categoria '${catName}' e reatribuiu itens para 'Outros'`
+      });
+    }
+
     res.json({ success: true });
   } catch (err: any) {
+    console.error("Erro ao excluir categoria:", err);
     res.status(500).json({ error: "Erro ao excluir categoria." });
   }
 });
@@ -1368,6 +1406,51 @@ Retorne diretamente o texto pronto da resposta em português do Brasil, sem saud
       error: "Erro na geração por IA",
       details: error?.message || "Erro desconhecido"
     });
+  }
+});
+
+// --- Atualização Automatizada de Sistema para Administradores (1 Clique via GitHub) ---
+app.post("/api/admin/system/update", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || (req.headers as any).Authorization;
+    let userId = activeUserId;
+    if (authHeader) {
+      const token = String(authHeader).trim().replace(/^Bearer\s+/i, "");
+      const match = token.match(/^jwt_token_([a-zA-Z0-9-]+)/);
+      if (match) userId = match[1];
+    }
+
+    const currentRes = await query("SELECT role, name FROM users WHERE id::text = $1", [userId]);
+    if (currentRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem disparar a atualização do sistema." });
+    }
+
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+
+    console.log(`🚀 [ADMIN UPDATE] Iniciando atualização do sistema solicitada por ${currentRes.rows[0].name}...`);
+
+    const { stdout } = await execAsync("git pull origin main");
+    console.log("[ADMIN UPDATE RESULT]:", stdout);
+
+    recordAuditLog({
+      userId,
+      userName: currentRes.rows[0].name,
+      userRole: "ADMIN",
+      module: "Sistema",
+      action: "UPDATE",
+      description: `Disparou a atualização automática do sistema via GitHub (${stdout.trim()})`
+    });
+
+    res.json({
+      success: true,
+      message: "Sistema atualizado com sucesso a partir do repositório GitHub!",
+      output: stdout.trim()
+    });
+  } catch (err: any) {
+    console.error("Erro ao atualizar sistema via Git:", err);
+    res.status(500).json({ error: "Erro ao executar atualização via Git.", details: err?.message || "Verifique se o Git está acessível no servidor." });
   }
 });
 
