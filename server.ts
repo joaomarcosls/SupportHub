@@ -367,8 +367,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.0.9",
-    rawVersion: "1.0.9",
+    version: "v1.1.0",
+    rawVersion: "1.1.0",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -1484,7 +1484,21 @@ app.post("/api/admin/system/update", async (req, res) => {
       }
     }
 
-    const { stdout } = await execAsync("git config --global --add safe.directory '*' && git pull origin main");
+    const fs = await import("fs");
+    let stdout = "";
+
+    // Se o diretório .git não existir no container atual, inicializar e vincular ao GitHub
+    if (!fs.existsSync(".git")) {
+      console.log("⚠️ Diretório .git não localizado no container. Inicializando repositório Git...");
+      const initRes = await execAsync(
+        "git init && git config --global --add safe.directory '*' && git remote add origin https://github.com/joaomarcosls/SupportHub.git && git fetch origin main && git reset --hard origin/main"
+      );
+      stdout = initRes.stdout || "Repositório Git inicializado e código sincronizado com origin/main.";
+    } else {
+      const pullRes = await execAsync("git config --global --add safe.directory '*' && git pull origin main");
+      stdout = pullRes.stdout || "Código atualizado via git pull.";
+    }
+
     console.log("[ADMIN UPDATE RESULT]:", stdout);
 
     recordAuditLog({
