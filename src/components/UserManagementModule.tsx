@@ -179,17 +179,17 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
 
           <div className="bg-slate-950 p-3.5 rounded-xl border border-blue-500/20 space-y-1">
             <div className="font-bold text-blue-400 flex items-center justify-between">
-              <span>Agente / Suporte</span>
+              <span>Analista de suporte</span>
               <span className="text-[10px] bg-blue-500/20 px-1.5 py-0.5 rounded">Operacional</span>
             </div>
             <p className="text-[11px] text-slate-400">
-              Cria e edita respostas rápidas, publica artigos na wiki e usa o bloco de rascunho. Sem gestão de usuários.
+              Adiciona categorias (sem editar/excluir), cria/edita cidades e links (sem exclui-los), cria/edita respostas rápidas e wiki.
             </p>
           </div>
 
           <div className="bg-slate-950 p-3.5 rounded-xl border border-amber-500/20 space-y-1">
             <div className="font-bold text-amber-400 flex items-center justify-between">
-              <span>Leitura (Trainee)</span>
+              <span>Usuário consulta</span>
               <span className="text-[10px] bg-amber-500/20 px-1.5 py-0.5 rounded">Apenas Consulta</span>
             </div>
             <p className="text-[11px] text-slate-400">
