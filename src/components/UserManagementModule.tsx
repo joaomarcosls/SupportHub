@@ -257,7 +257,7 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                         }`}
                       >
                         <ShieldCheck className="w-3 h-3" />
-                        {usr.role === 'ADMIN' ? 'Administrador' : usr.role === 'AGENT' ? 'Agente de Suporte' : 'Trainee (Leitura)'}
+                        {usr.role === 'ADMIN' ? 'Administrador' : usr.role === 'AGENT' ? 'Analista de suporte' : 'Usuário consulta'}
                       </span>
                     </td>
 
@@ -408,8 +408,8 @@ export const UserManagementModule: React.FC<UserManagementModuleProps> = ({
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-purple-500 font-medium"
                 >
                   <option value="ADMIN">Administrador (Total)</option>
-                  <option value="AGENT">Agente / Suporte (Operacional + Edição)</option>
-                  <option value="TRAINEE">Leitura (Trainee / Estágio - Apenas Consulta)</option>
+                  <option value="AGENT">Analista de suporte (Operacional + Edição)</option>
+                  <option value="TRAINEE">Leitura (Usuário consulta - Apenas Consulta)</option>
                 </select>
               </div>
 

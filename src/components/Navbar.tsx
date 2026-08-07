@@ -102,8 +102,10 @@ export const Navbar: React.FC<NavbarProps> = ({
       });
       const data = await res.json();
       if (res.ok) {
-        alert(`✅ ${data.message || 'Sistema atualizado com sucesso!'}\n\nA página será recarregada.`);
-        window.location.reload();
+        alert(`✅ ${data.message || 'Sistema atualizado com sucesso!'}\n\nAguarde o container reiniciar (recarregaremos a página em alguns segundos).`);
+        setTimeout(() => {
+          window.location.reload();
+        }, 4000);
       } else {
         alert(`⚠️ ${data.error || 'Erro ao realizar atualização.'}\n${data.details || ''}`);
       }
@@ -243,7 +245,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <div className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-purple-300 bg-purple-500/15 border border-purple-500/30 px-2 py-0.5 rounded-md">
                         <ShieldCheck className="w-3 h-3 text-purple-400" />
                         <span>
-                          {currentUser.role === 'ADMIN' ? 'Administrador (Acesso Total)' : currentUser.role === 'AGENT' ? 'Agente de Suporte' : 'Trainee (Leitura)'}
+                          {currentUser.role === 'ADMIN' ? 'Administrador (Acesso Total)' : currentUser.role === 'AGENT' ? 'Analista de suporte' : 'Usuário consulta'}
                         </span>
                       </div>
                     </div>

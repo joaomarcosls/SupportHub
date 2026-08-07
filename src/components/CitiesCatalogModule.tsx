@@ -78,6 +78,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
   const [cityPrimaryUser, setCityPrimaryUser] = useState('');
   const [cityBackupUser, setCityBackupUser] = useState('');
   const [cityNotes, setCityNotes] = useState('');
+  const [cityActive, setCityActive] = useState(true);
+  const [cityInactiveReason, setCityInactiveReason] = useState<'inadimplencia' | 'bloqueio_parcial' | 'bloqueio_total' | ''>('');
 
   // Form Link State
   const [linkName, setLinkName] = useState('');
@@ -140,6 +142,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
       setCityIbge(city.codeIBGE || '');
       setCityPrimaryUser(city.primaryUser || '');
       setCityBackupUser(city.backupUser || '');
+      setCityActive(city.active !== false);
+      setCityInactiveReason(city.inactiveReason || '');
       setCityNotes(city.notes || '');
     } else {
       setEditingCity(null);
@@ -148,6 +152,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
       setCityIbge('');
       setCityPrimaryUser('');
       setCityBackupUser('');
+      setCityActive(true);
+      setCityInactiveReason('');
       setCityNotes('');
     }
     setIsCityModalOpen(true);
@@ -164,6 +170,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
         codeIBGE: cityIbge,
         primaryUser: cityPrimaryUser,
         backupUser: cityBackupUser,
+        active: cityActive,
+        inactiveReason: cityActive ? '' : cityInactiveReason,
         notes: cityNotes
       });
     } else {
@@ -173,6 +181,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
         codeIBGE: cityIbge,
         primaryUser: cityPrimaryUser,
         backupUser: cityBackupUser,
+        active: cityActive,
+        inactiveReason: cityActive ? '' : cityInactiveReason,
         notes: cityNotes
       });
     }
@@ -385,15 +395,30 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
           {filteredCities.map(city => {
             const linksList = city.links || [];
 
+            const getReasonLabel = (reason?: string) => {
+              switch (reason) {
+                case 'inadimplencia': return 'Inadimplência';
+                case 'bloqueio_parcial': return 'Bloqueio Parcial';
+                case 'bloqueio_total': return 'Bloqueio Total';
+                default: return 'Inativo';
+              }
+            };
+
             return (
               <div
                 key={city.id}
-                className="bg-slate-900 rounded-2xl border border-slate-800 shadow-xl overflow-hidden transition-all hover:border-slate-700"
+                className={`bg-slate-900 rounded-2xl border shadow-xl overflow-hidden transition-all hover:border-slate-700 ${
+                  city.active === false ? 'border-rose-500/30 opacity-75' : 'border-slate-800'
+                }`}
               >
                 {/* City Card Header */}
                 <div className="p-4 sm:p-5 bg-slate-950/80 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-600/10 text-blue-400 border border-blue-500/20 flex items-center justify-center font-bold text-sm shrink-0">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 border ${
+                      city.active === false 
+                        ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' 
+                        : 'bg-blue-600/10 text-blue-400 border-blue-500/20'
+                    }`}>
                       {city.uf}
                     </div>
 
@@ -403,6 +428,17 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
                         {city.codeIBGE && (
                           <span className="text-[10px] font-mono bg-slate-800 text-slate-400 px-2 py-0.5 rounded border border-slate-700">
                             Código da Cidade: {city.codeIBGE}
+                          </span>
+                        )}
+                        {city.active === false && (
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                            city.inactiveReason === 'inadimplencia'
+                              ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                              : city.inactiveReason === 'bloqueio_parcial'
+                              ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                              : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                          }`}>
+                            Inativo - {getReasonLabel(city.inactiveReason)}
                           </span>
                         )}
                       </div>
@@ -702,6 +738,41 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
                   placeholder="Ex: Praça com suporte prioritário N2 em horário comercial."
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500"
                 />
+              </div>
+
+              {/* Status de Ativação e Motivo */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800/80">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-300">Status da Praça</label>
+                  <select
+                    value={cityActive ? "true" : "false"}
+                    onChange={(e) => {
+                      const isActive = e.target.value === "true";
+                      setCityActive(isActive);
+                      if (isActive) setCityInactiveReason('');
+                      else if (!cityInactiveReason) setCityInactiveReason('inadimplencia');
+                    }}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-medium"
+                  >
+                    <option value="true">Ativo / Operante</option>
+                    <option value="false">Inativo / Bloqueado</option>
+                  </select>
+                </div>
+
+                {!cityActive && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-slate-300">Motivo da Inativação</label>
+                    <select
+                      value={cityInactiveReason}
+                      onChange={(e) => setCityInactiveReason(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-medium"
+                    >
+                      <option value="inadimplencia">Inadimplência</option>
+                      <option value="bloqueio_parcial">Bloqueio Parcial</option>
+                      <option value="bloqueio_total">Bloqueio Total</option>
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
 

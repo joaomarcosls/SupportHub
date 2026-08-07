@@ -31,6 +31,8 @@ export interface City {
   codeIBGE?: string;
   primaryUser?: string; // Operador Titular Responsável
   backupUser?: string; // Operador Reserva Responsável
+  active?: boolean;
+  inactiveReason?: 'inadimplencia' | 'bloqueio_parcial' | 'bloqueio_total' | '';
   notes?: string;
   linksCount?: number;
   links?: CitySystemLink[];

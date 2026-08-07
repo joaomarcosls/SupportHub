@@ -149,7 +149,7 @@ export const CategoryManagementModule: React.FC<CategoryManagementModuleProps> =
               <span className="text-[10px] text-slate-500 font-mono">ID: {cat.id.slice(0, 8)}...</span>
 
               <div className="flex items-center gap-2">
-                {!isTrainee && (
+                {isAdmin && (
                   <button
                     type="button"
                     onClick={() => handleOpenModal(cat)}

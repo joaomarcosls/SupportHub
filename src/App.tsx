@@ -57,6 +57,15 @@ export function App() {
     totalCopies: 0
   });
 
+  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
+    const token = sessionStorage.getItem('supporthub_token');
+    const headers = {
+      ...options.headers,
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
+    return fetch(url, { ...options, headers });
+  };
+
   const showToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
     setToastNotification({ message, type });
     setTimeout(() => setToastNotification(null), 4500);
@@ -69,9 +78,7 @@ export function App() {
       let loggedUser: User | null = null;
 
       if (token) {
-        const userRes = await fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const userRes = await authenticatedFetch('/api/auth/me');
         const userData = await userRes.json();
         if (userData.user) {
           loggedUser = userData.user;
@@ -89,27 +96,27 @@ export function App() {
       }
 
       // Cities & Links
-      const cityRes = await fetch('/api/cities');
+      const cityRes = await authenticatedFetch('/api/cities');
       const cityData = await cityRes.json();
       if (Array.isArray(cityData)) setCities(cityData);
 
       // Categories
-      const catRes = await fetch('/api/categories');
+      const catRes = await authenticatedFetch('/api/categories');
       const catData = await catRes.json();
       if (Array.isArray(catData)) setCategories(catData);
 
       // Responses
-      const respRes = await fetch('/api/canned-responses');
+      const respRes = await authenticatedFetch('/api/canned-responses');
       const respData = await respRes.json();
       if (Array.isArray(respData)) setResponses(respData);
 
       // Articles
-      const artRes = await fetch('/api/kb/articles');
+      const artRes = await authenticatedFetch('/api/kb/articles');
       const artData = await artRes.json();
       if (Array.isArray(artData)) setArticles(artData);
 
       // Scratchpad
-      const padRes = await fetch('/api/scratchpad');
+      const padRes = await authenticatedFetch('/api/scratchpad');
       const padData = await padRes.json();
       if (padData.content !== undefined) {
         setScratchpadContent(padData.content);
@@ -117,17 +124,17 @@ export function App() {
       }
 
       // Stats
-      const statsRes = await fetch('/api/stats');
+      const statsRes = await authenticatedFetch('/api/stats');
       const statsData = await statsRes.json();
       if (statsData.totalResponses !== undefined) setStats(statsData);
 
       // Users List & Audit Logs (if Admin)
       if (loggedUser?.role === 'ADMIN') {
-        const uRes = await fetch('/api/users');
+        const uRes = await authenticatedFetch('/api/users');
         const uData = await uRes.json();
         if (Array.isArray(uData)) setUsersList(uData);
 
-        const auditRes = await fetch('/api/audit-logs');
+        const auditRes = await authenticatedFetch('/api/audit-logs');
         const auditData = await auditRes.json();
         if (Array.isArray(auditData)) setAuditLogs(auditData);
       }
@@ -142,7 +149,7 @@ export function App() {
 
   // Auth: Login & Logout & Password Change
   const handleLogin = async (email: string, password?: string) => {
-    const res = await fetch('/api/auth/login', {
+    const res = await authenticatedFetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
@@ -167,13 +174,9 @@ export function App() {
   };
 
   const handleChangePassword = async (newPassword: string, currentPassword?: string) => {
-    const token = sessionStorage.getItem('supporthub_token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-
-    const res = await fetch('/api/auth/change-password', {
+    const res = await authenticatedFetch('/api/auth/change-password', {
       method: 'POST',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ currentPassword, newPassword })
     });
 
@@ -201,7 +204,7 @@ export function App() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await authenticatedFetch('/api/auth/logout', { method: 'POST' });
       sessionStorage.removeItem('supporthub_token');
       setCurrentUser(null);
       setIsLoggedOut(true);

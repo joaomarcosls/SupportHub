@@ -50,8 +50,19 @@ async function query(text: string, params?: any[]) {
   return await pool.query(text, params);
 }
 
-// Global active session state (simulação de sessão)
+// Global active session state (simulação de sessão - fallback legado)
 let activeUserId = "";
+
+// Helper: Extrair o ID do usuário de forma dinâmica e segura do token JWT
+function getActiveUserId(req: any): string {
+  const authHeader = req?.headers?.authorization || req?.headers?.Authorization;
+  if (authHeader) {
+    const token = String(authHeader).trim().replace(/^Bearer\s+/i, "");
+    const match = token.match(/^jwt_token_([a-zA-Z0-9-]+)/);
+    if (match) return match[1];
+  }
+  return activeUserId;
+}
 
 // Helper: Sanitize User (Remove password / password_hash)
 function sanitizeUser(u: any) {
@@ -341,6 +352,8 @@ async function initDatabase() {
     await query(`
       ALTER TABLE cidades ADD COLUMN IF NOT EXISTS primary_user_name VARCHAR(150);
       ALTER TABLE cidades ADD COLUMN IF NOT EXISTS backup_user_name VARCHAR(150);
+      ALTER TABLE cidades ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE cidades ADD COLUMN IF NOT EXISTS inactive_reason VARCHAR(100) DEFAULT NULL;
     `);
 
     // SEED INITIAL ADMIN USER IF USERS TABLE IS EMPTY
@@ -367,8 +380,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.1.2",
-    rawVersion: "1.1.2",
+    version: "v1.2.0",
+    rawVersion: "1.2.0",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -478,7 +491,8 @@ app.post("/api/auth/login", async (req, res) => {
 
 app.post("/api/auth/logout", async (req, res) => {
   try {
-    const userRes = await query("SELECT * FROM users WHERE id::text = $1", [activeUserId]);
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT * FROM users WHERE id::text = $1", [userId]);
     if (userRes.rows[0]) {
       recordAuditLog({
         userId: userRes.rows[0].id,
@@ -529,7 +543,7 @@ app.post("/api/auth/switch-user-id", async (req, res) => {
 app.post("/api/auth/change-password", async (req, res) => {
   try {
     const authHeader = req.headers.authorization || (req.headers as any).Authorization;
-    let targetUserId = activeUserId;
+    let targetUserId = getActiveUserId(req);
 
     if (authHeader) {
       const token = String(authHeader).trim().replace(/^Bearer\s+/i, "");
@@ -672,7 +686,7 @@ app.get("/api/users", async (req, res) => {
 
 app.post("/api/users", async (req, res) => {
   try {
-    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [getActiveUserId(req)]);
     if (currentRes.rows[0]?.role !== "ADMIN") {
       return res.status(403).json({ error: "Apenas Administradores podem cadastrar novos operadores." });
     }
@@ -727,7 +741,7 @@ app.post("/api/users", async (req, res) => {
 
 app.put("/api/users/:id", async (req, res) => {
   try {
-    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [getActiveUserId(req)]);
     if (currentRes.rows[0]?.role !== "ADMIN") {
       return res.status(403).json({ error: "Apenas Administradores podem modificar perfis." });
     }
@@ -783,7 +797,7 @@ app.put("/api/users/:id", async (req, res) => {
 
 app.patch("/api/users/:id/toggle-status", async (req, res) => {
   try {
-    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [getActiveUserId(req)]);
     if (currentRes.rows[0]?.role !== "ADMIN") {
       return res.status(403).json({ error: "Apenas Administradores podem alterar o status." });
     }
@@ -804,13 +818,14 @@ app.patch("/api/users/:id/toggle-status", async (req, res) => {
 
 app.delete("/api/users/:id", async (req, res) => {
   try {
-    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [activeUserId]);
+    const currentUserId = getActiveUserId(req);
+    const currentRes = await query("SELECT role FROM users WHERE id::text = $1", [currentUserId]);
     if (currentRes.rows[0]?.role !== "ADMIN") {
       return res.status(403).json({ error: "Apenas Administradores podem excluir usuários." });
     }
 
     const { id } = req.params;
-    if (id === activeUserId) {
+    if (id === currentUserId) {
       return res.status(400).json({ error: "Você não pode excluir sua própria conta ativa no momento." });
     }
 
@@ -863,6 +878,13 @@ app.get("/api/categories", async (req, res) => {
 
 app.post("/api/categories", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    const userRole = userRes.rows[0]?.role;
+    if (userRole !== "ADMIN" && userRole !== "AGENT") {
+      return res.status(403).json({ error: "Você não tem permissão para cadastrar categorias." });
+    }
+
     const { name, color, icon, description } = req.body;
     if (!name) return res.status(400).json({ error: "O nome da categoria é obrigatório." });
 
@@ -892,6 +914,12 @@ app.post("/api/categories", async (req, res) => {
 
 app.put("/api/categories/:id", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    if (userRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem editar categorias." });
+    }
+
     const { id } = req.params;
     const { name, color, icon, description } = req.body;
 
@@ -938,6 +966,12 @@ app.put("/api/categories/:id", async (req, res) => {
 
 app.delete("/api/categories/:id", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    if (userRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem excluir categorias." });
+    }
+
     const { id } = req.params;
     const catRes = await query("SELECT id, name FROM categories WHERE id::text = $1", [id]);
     const catName = catRes.rows[0]?.name;
@@ -1035,7 +1069,7 @@ app.delete("/api/categories/:id", async (req, res) => {
 app.get("/api/cities", async (req, res) => {
   try {
     const { uf, search } = req.query;
-    let sql = `SELECT id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", notes, created_at AS "createdAt" FROM cidades WHERE 1=1`;
+    let sql = `SELECT id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", active, inactive_reason AS "inactiveReason", notes, created_at AS "createdAt" FROM cidades WHERE 1=1`;
     const params: any[] = [];
 
     if (uf && uf !== "ALL") {
@@ -1074,14 +1108,21 @@ app.get("/api/cities", async (req, res) => {
 
 app.post("/api/cities", async (req, res) => {
   try {
-    const { name, uf, codeIBGE, primaryUser, backupUser, notes } = req.body;
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    const userRole = userRes.rows[0]?.role;
+    if (userRole !== "ADMIN" && userRole !== "AGENT") {
+      return res.status(403).json({ error: "Você não tem permissão para cadastrar cidades." });
+    }
+
+    const { name, uf, codeIBGE, primaryUser, backupUser, active, inactiveReason, notes } = req.body;
     if (!name || !uf) return res.status(400).json({ error: "Nome e UF são obrigatórios." });
 
     const insertRes = await query(
-      `INSERT INTO cidades (id, name, uf, code_ibge, primary_user_name, backup_user_name, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", notes, created_at AS "createdAt"`,
-      [crypto.randomUUID(), String(name).trim(), String(uf).toUpperCase().trim(), codeIBGE || "", primaryUser || null, backupUser || null, notes || ""]
+      `INSERT INTO cidades (id, name, uf, code_ibge, primary_user_name, backup_user_name, active, inactive_reason, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", active, inactive_reason AS "inactiveReason", notes, created_at AS "createdAt"`,
+      [crypto.randomUUID(), String(name).trim(), String(uf).toUpperCase().trim(), codeIBGE || "", primaryUser || null, backupUser || null, active !== false, inactiveReason || null, notes || ""]
     );
 
     recordAuditLog({
@@ -1098,8 +1139,18 @@ app.post("/api/cities", async (req, res) => {
 
 app.put("/api/cities/:id", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    const userRole = userRes.rows[0]?.role;
+    if (userRole !== "ADMIN" && userRole !== "AGENT") {
+      return res.status(403).json({ error: "Você não tem permissão para editar cidades." });
+    }
+
     const { id } = req.params;
-    const { name, uf, codeIBGE, primaryUser, backupUser, notes } = req.body;
+    const { name, uf, codeIBGE, primaryUser, backupUser, active, inactiveReason, notes } = req.body;
+
+    const activeVal = active !== undefined ? active : null;
+    const inactiveReasonVal = activeVal === true ? null : (inactiveReason || null);
 
     const updateRes = await query(
       `UPDATE cidades
@@ -1108,11 +1159,13 @@ app.put("/api/cities/:id", async (req, res) => {
            code_ibge = COALESCE($3, code_ibge),
            primary_user_name = $4,
            backup_user_name = $5,
-           notes = COALESCE($6, notes),
+           active = COALESCE($6, active),
+           inactive_reason = $7,
+           notes = COALESCE($8, notes),
            updated_at = NOW()
-       WHERE id::text = $7
-       RETURNING id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", notes, created_at AS "createdAt"`,
-      [name ? String(name).trim() : null, uf ? String(uf).toUpperCase().trim() : null, codeIBGE, primaryUser || null, backupUser || null, notes, id]
+       WHERE id::text = $9
+       RETURNING id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", active, inactive_reason AS "inactiveReason", notes, created_at AS "createdAt"`,
+      [name ? String(name).trim() : null, uf ? String(uf).toUpperCase().trim() : null, codeIBGE, primaryUser || null, backupUser || null, activeVal, inactiveReasonVal, notes, id]
     );
 
     if (updateRes.rows.length === 0) return res.status(404).json({ error: "Cidade não encontrada." });
@@ -1126,6 +1179,12 @@ app.put("/api/cities/:id", async (req, res) => {
 
 app.delete("/api/cities/:id", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    if (userRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem excluir cidades." });
+    }
+
     const { id } = req.params;
     await query("DELETE FROM cidades WHERE id::text = $1", [id]);
     res.json({ success: true });
@@ -1182,6 +1241,12 @@ app.put("/api/cities/links/:linkId", async (req, res) => {
 
 app.delete("/api/cities/links/:linkId", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
+    const userRes = await query("SELECT role FROM users WHERE id::text = $1", [userId]);
+    if (userRes.rows[0]?.role !== "ADMIN") {
+      return res.status(403).json({ error: "Apenas Administradores podem excluir links de sistemas." });
+    }
+
     const { linkId } = req.params;
     await query("DELETE FROM sistemas_links WHERE id::text = $1", [linkId]);
     res.json({ success: true });
@@ -1367,7 +1432,8 @@ app.post("/api/kb/articles", async (req, res) => {
       return res.status(400).json({ error: "Título, categoria e conteúdo Markdown são obrigatórios." });
     }
 
-    const uRes = await query("SELECT name FROM users WHERE id::text = $1", [activeUserId]);
+    const userId = getActiveUserId(req);
+    const uRes = await query("SELECT name FROM users WHERE id::text = $1", [userId]);
     const authorName = uRes.rows[0]?.name || "Suporte";
     const slug = String(title).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-");
 
@@ -1375,7 +1441,7 @@ app.post("/api/kb/articles", async (req, res) => {
       `INSERT INTO knowledge_articles (id, title, slug, category_id, content_md, tags, author_id, author_name)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, title, slug, category_id AS "categoryId", content_md AS "contentMd", tags, views_count AS "viewsCount", helpful_count AS "helpfulCount", author_id AS "authorId", author_name AS "authorName", created_at AS "createdAt"`,
-      [crypto.randomUUID(), String(title).trim(), slug, categoryId, contentMd, JSON.stringify(Array.isArray(tags) ? tags : []), activeUserId || null, authorName]
+      [crypto.randomUUID(), String(title).trim(), slug, categoryId, contentMd, JSON.stringify(Array.isArray(tags) ? tags : []), userId || null, authorName]
     );
 
     res.status(201).json(insertRes.rows[0]);
@@ -1424,9 +1490,10 @@ app.delete("/api/kb/articles/:id", async (req, res) => {
 // --- Scratchpad ---
 app.get("/api/scratchpad", async (req, res) => {
   try {
+    const userId = getActiveUserId(req);
     const padRes = await query(
       "SELECT content, last_saved_at AS \"lastSavedAt\" FROM user_scratchpads WHERE user_id::text = $1",
-      [activeUserId]
+      [userId]
     );
     if (padRes.rows.length > 0) {
       res.json(padRes.rows[0]);
@@ -1441,12 +1508,13 @@ app.get("/api/scratchpad", async (req, res) => {
 app.put("/api/scratchpad", async (req, res) => {
   try {
     const { content } = req.body;
+    const userId = getActiveUserId(req);
     const saveRes = await query(
       `INSERT INTO user_scratchpads (user_id, content, last_saved_at)
        VALUES ($1, $2, NOW())
        ON CONFLICT (user_id) DO UPDATE SET content = EXCLUDED.content, last_saved_at = NOW()
        RETURNING last_saved_at AS "lastSavedAt"`,
-      [activeUserId, content || ""]
+      [userId, content || ""]
     );
     res.json({ success: true, lastSavedAt: saveRes.rows[0].lastSavedAt });
   } catch (err: any) {
@@ -1497,14 +1565,7 @@ Retorne diretamente o texto pronto da resposta em português do Brasil, sem saud
 // --- Atualização Automatizada de Sistema para Administradores (1 Clique via GitHub) ---
 app.post("/api/admin/system/update", async (req, res) => {
   try {
-    const authHeader = req.headers.authorization || (req.headers as any).Authorization;
-    let userId = activeUserId;
-    if (authHeader) {
-      const token = String(authHeader).trim().replace(/^Bearer\s+/i, "");
-      const match = token.match(/^jwt_token_([a-zA-Z0-9-]+)/);
-      if (match) userId = match[1];
-    }
-
+    const userId = getActiveUserId(req);
     const currentRes = await query("SELECT role, name FROM users WHERE id::text = $1", [userId]);
     if (currentRes.rows[0]?.role !== "ADMIN") {
       return res.status(403).json({ error: "Apenas Administradores podem disparar a atualização do sistema." });
@@ -1556,9 +1617,16 @@ app.post("/api/admin/system/update", async (req, res) => {
 
     res.json({
       success: true,
-      message: "Sistema atualizado com sucesso a partir do repositório GitHub!",
+      message: "Sistema atualizado com sucesso a partir do repositório GitHub! Execute 'docker compose up -d --build' no terminal para compilar as novas alterações do frontend e backend.",
       output: stdout.trim()
     });
+
+    // Reiniciar o container em 1.5 segundos para recarregar o processo caso alguma dependência direta mude
+    setTimeout(() => {
+      console.log("🔄 Reiniciando container para carregar novos recursos...");
+      process.exit(0);
+    }, 1500);
+
   } catch (err: any) {
     console.error("Erro ao atualizar sistema via Git:", err);
     res.status(500).json({ error: "Erro ao executar atualização via Git.", details: err?.message || "Verifique se o Git está acessível no servidor." });
