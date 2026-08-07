@@ -20,12 +20,14 @@ import {
   ChevronUp,
   Link2,
   CheckCircle2,
-  Folder
+  Folder,
+  User as UserIcon
 } from 'lucide-react';
 
 interface CitiesCatalogModuleProps {
   cities: City[];
   categories: Category[];
+  usersList?: User[];
   currentUser: User;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
@@ -41,6 +43,7 @@ interface CitiesCatalogModuleProps {
 export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
   cities,
   categories,
+  usersList = [],
   currentUser,
   searchQuery,
   setSearchQuery,
@@ -72,6 +75,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
   const [cityName, setCityName] = useState('');
   const [cityUf, setCityUf] = useState('SP');
   const [cityIbge, setCityIbge] = useState('');
+  const [cityPrimaryUser, setCityPrimaryUser] = useState('');
+  const [cityBackupUser, setCityBackupUser] = useState('');
   const [cityNotes, setCityNotes] = useState('');
 
   // Form Link State
@@ -110,6 +115,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
         const matchCityName = city.name.toLowerCase().includes(q);
         const matchUF = city.uf.toLowerCase().includes(q);
         const matchNotes = city.notes?.toLowerCase().includes(q);
+        const matchPrimaryUser = city.primaryUser?.toLowerCase().includes(q);
+        const matchBackupUser = city.backupUser?.toLowerCase().includes(q);
         const matchLinks = city.links?.some(l => 
           l.name.toLowerCase().includes(q) || 
           l.url.toLowerCase().includes(q) || 
@@ -117,7 +124,7 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
           l.category?.toLowerCase().includes(q)
         );
 
-        return matchCityName || matchUF || matchNotes || matchLinks;
+        return matchCityName || matchUF || matchNotes || matchPrimaryUser || matchBackupUser || matchLinks;
       }
 
       return true;
@@ -131,12 +138,16 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
       setCityName(city.name);
       setCityUf(city.uf);
       setCityIbge(city.codeIBGE || '');
+      setCityPrimaryUser(city.primaryUser || '');
+      setCityBackupUser(city.backupUser || '');
       setCityNotes(city.notes || '');
     } else {
       setEditingCity(null);
       setCityName('');
       setCityUf('SP');
       setCityIbge('');
+      setCityPrimaryUser('');
+      setCityBackupUser('');
       setCityNotes('');
     }
     setIsCityModalOpen(true);
@@ -151,6 +162,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
         name: cityName,
         uf: cityUf.toUpperCase(),
         codeIBGE: cityIbge,
+        primaryUser: cityPrimaryUser,
+        backupUser: cityBackupUser,
         notes: cityNotes
       });
     } else {
@@ -158,6 +171,8 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
         name: cityName,
         uf: cityUf.toUpperCase(),
         codeIBGE: cityIbge,
+        primaryUser: cityPrimaryUser,
+        backupUser: cityBackupUser,
         notes: cityNotes
       });
     }
@@ -391,8 +406,26 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
                           </span>
                         )}
                       </div>
+                      
+                      {(city.primaryUser || city.backupUser) && (
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          {city.primaryUser && (
+                            <span className="inline-flex items-center gap-1 bg-blue-500/10 text-blue-300 px-2 py-0.5 rounded-md border border-blue-500/20 text-xs font-medium">
+                              <UserIcon className="w-3.5 h-3.5 text-blue-400" />
+                              <span>Titular: <strong className="text-slate-100 font-semibold">{city.primaryUser}</strong></span>
+                            </span>
+                          )}
+                          {city.backupUser && (
+                            <span className="inline-flex items-center gap-1 bg-purple-500/10 text-purple-300 px-2 py-0.5 rounded-md border border-purple-500/20 text-xs font-medium">
+                              <UserIcon className="w-3.5 h-3.5 text-purple-400" />
+                              <span>Reserva: <strong className="text-slate-100 font-semibold">{city.backupUser}</strong></span>
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       {city.notes && (
-                        <p className="text-xs text-slate-400 mt-0.5">{city.notes}</p>
+                        <p className="text-xs text-slate-400 mt-1">{city.notes}</p>
                       )}
                     </div>
                   </div>
@@ -621,6 +654,43 @@ export const CitiesCatalogModule: React.FC<CitiesCatalogModuleProps> = ({
                   placeholder="Ex: 247990"
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-mono"
                 />
+              </div>
+
+              {/* Responsáveis: Titular e Reserva */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-300 flex items-center gap-1">
+                    <UserIcon className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Operador Titular (Responsável)</span>
+                  </label>
+                  <select
+                    value={cityPrimaryUser}
+                    onChange={(e) => setCityPrimaryUser(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-medium"
+                  >
+                    <option value="">-- Nenhum Titular Atribuído --</option>
+                    {usersList.map(u => (
+                      <option key={u.id} value={u.name}>{u.name} ({u.department || u.role})</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-slate-300 flex items-center gap-1">
+                    <UserIcon className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Operador Reserva (Backup)</span>
+                  </label>
+                  <select
+                    value={cityBackupUser}
+                    onChange={(e) => setCityBackupUser(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-medium"
+                  >
+                    <option value="">-- Nenhum Reserva Atribuído --</option>
+                    {usersList.map(u => (
+                      <option key={u.id} value={u.name}>{u.name} ({u.department || u.role})</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="space-y-1">

@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS cidades (
     name VARCHAR(150) NOT NULL,
     uf VARCHAR(2) NOT NULL,
     code_ibge VARCHAR(20),
+    primary_user_name VARCHAR(150),
+    backup_user_name VARCHAR(150),
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

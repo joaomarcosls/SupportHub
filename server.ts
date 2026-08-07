@@ -337,6 +337,12 @@ async function initDatabase() {
       WHERE avatar_url LIKE 'http%' OR avatar_url IS NULL;
     `);
 
+    // Migration: Adicionar colunas de Operador Titular e Reserva na tabela cidades
+    await query(`
+      ALTER TABLE cidades ADD COLUMN IF NOT EXISTS primary_user_name VARCHAR(150);
+      ALTER TABLE cidades ADD COLUMN IF NOT EXISTS backup_user_name VARCHAR(150);
+    `);
+
     // SEED INITIAL ADMIN USER IF USERS TABLE IS EMPTY
     const userCountRes = await query("SELECT COUNT(*) FROM users");
     if (parseInt(userCountRes.rows[0].count, 10) === 0) {
@@ -361,8 +367,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.0.6",
-    rawVersion: "1.0.6",
+    version: "v1.0.7",
+    rawVersion: "1.0.7",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -963,7 +969,7 @@ app.delete("/api/categories/:id", async (req, res) => {
 app.get("/api/cities", async (req, res) => {
   try {
     const { uf, search } = req.query;
-    let sql = "SELECT id, name, uf, code_ibge AS \"codeIBGE\", notes, created_at AS \"createdAt\" FROM cidades WHERE 1=1";
+    let sql = `SELECT id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", notes, created_at AS "createdAt" FROM cidades WHERE 1=1`;
     const params: any[] = [];
 
     if (uf && uf !== "ALL") {
@@ -973,7 +979,7 @@ app.get("/api/cities", async (req, res) => {
 
     if (search) {
       params.push(`%${String(search).toLowerCase()}%`);
-      sql += ` AND (LOWER(name) LIKE $${params.length} OR LOWER(uf) LIKE $${params.length} OR LOWER(notes) LIKE $${params.length})`;
+      sql += ` AND (LOWER(name) LIKE $${params.length} OR LOWER(uf) LIKE $${params.length} OR LOWER(COALESCE(primary_user_name, '')) LIKE $${params.length} OR LOWER(COALESCE(backup_user_name, '')) LIKE $${params.length} OR LOWER(COALESCE(notes, '')) LIKE $${params.length})`;
     }
 
     sql += " ORDER BY name ASC";
@@ -1002,20 +1008,20 @@ app.get("/api/cities", async (req, res) => {
 
 app.post("/api/cities", async (req, res) => {
   try {
-    const { name, uf, codeIBGE, notes } = req.body;
+    const { name, uf, codeIBGE, primaryUser, backupUser, notes } = req.body;
     if (!name || !uf) return res.status(400).json({ error: "Nome e UF são obrigatórios." });
 
     const insertRes = await query(
-      `INSERT INTO cidades (id, name, uf, code_ibge, notes)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, uf, code_ibge AS "codeIBGE", notes, created_at AS "createdAt"`,
-      [crypto.randomUUID(), String(name).trim(), String(uf).toUpperCase().trim(), codeIBGE || "", notes || ""]
+      `INSERT INTO cidades (id, name, uf, code_ibge, primary_user_name, backup_user_name, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", notes, created_at AS "createdAt"`,
+      [crypto.randomUUID(), String(name).trim(), String(uf).toUpperCase().trim(), codeIBGE || "", primaryUser || null, backupUser || null, notes || ""]
     );
 
     recordAuditLog({
       module: "Cidades",
       action: "CREATE",
-      description: `Cadastrou a cidade ${name} - ${uf.toUpperCase()}`
+      description: `Cadastrou a cidade ${name} - ${uf.toUpperCase()} (Titular: ${primaryUser || 'Nenhum'}, Reserva: ${backupUser || 'Nenhum'})`
     });
 
     res.status(201).json({ ...insertRes.rows[0], linksCount: 0, links: [] });
@@ -1027,18 +1033,20 @@ app.post("/api/cities", async (req, res) => {
 app.put("/api/cities/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, uf, codeIBGE, notes } = req.body;
+    const { name, uf, codeIBGE, primaryUser, backupUser, notes } = req.body;
 
     const updateRes = await query(
       `UPDATE cidades
        SET name = COALESCE($1, name),
            uf = COALESCE($2, uf),
            code_ibge = COALESCE($3, code_ibge),
-           notes = COALESCE($4, notes),
+           primary_user_name = $4,
+           backup_user_name = $5,
+           notes = COALESCE($6, notes),
            updated_at = NOW()
-       WHERE id::text = $5
-       RETURNING id, name, uf, code_ibge AS "codeIBGE", notes, created_at AS "createdAt"`,
-      [name ? String(name).trim() : null, uf ? String(uf).toUpperCase().trim() : null, codeIBGE, notes, id]
+       WHERE id::text = $7
+       RETURNING id, name, uf, code_ibge AS "codeIBGE", primary_user_name AS "primaryUser", backup_user_name AS "backupUser", notes, created_at AS "createdAt"`,
+      [name ? String(name).trim() : null, uf ? String(uf).toUpperCase().trim() : null, codeIBGE, primaryUser || null, backupUser || null, notes, id]
     );
 
     if (updateRes.rows.length === 0) return res.status(404).json({ error: "Cidade não encontrada." });

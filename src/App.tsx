@@ -609,6 +609,7 @@ export function App() {
           <CitiesCatalogModule
             cities={cities}
             categories={categories}
+            usersList={usersList}
             currentUser={currentUser}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}

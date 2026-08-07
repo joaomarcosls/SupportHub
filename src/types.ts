@@ -29,6 +29,8 @@ export interface City {
   name: string; // e.g. "São Paulo"
   uf: string; // e.g. "SP"
   codeIBGE?: string;
+  primaryUser?: string; // Operador Titular Responsável
+  backupUser?: string; // Operador Reserva Responsável
   notes?: string;
   linksCount?: number;
   links?: CitySystemLink[];
