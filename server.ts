@@ -361,8 +361,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.0.4",
-    rawVersion: "1.0.4",
+    version: "v1.0.5",
+    rawVersion: "1.0.5",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
