@@ -30,7 +30,7 @@ services:
       dockerfile: Dockerfile.backend
       args:
         REPO_URL: ${REPO_URL:-https://github.com/joaomarcosls/SupportHub.git}
-        BRANCH_VERSION: ${BRANCH_VERSION:-main}
+        BRANCH_VERSION: ${BRANCH_VERSION:-v1.0.2}
         GIT_AUTH_TOKEN: ${GIT_AUTH_TOKEN:-}
     container_name: supporthub_backend
     restart: always
@@ -58,7 +58,7 @@ services:
       dockerfile: Dockerfile.frontend
       args:
         REPO_URL: ${REPO_URL:-https://github.com/joaomarcosls/SupportHub.git}
-        BRANCH_VERSION: ${BRANCH_VERSION:-main}
+        BRANCH_VERSION: ${BRANCH_VERSION:-v1.0.2}
         GIT_AUTH_TOKEN: ${GIT_AUTH_TOKEN:-}
     container_name: supporthub_frontend
     restart: always

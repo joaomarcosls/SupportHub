@@ -52,24 +52,36 @@ export const Navbar: React.FC<NavbarProps> = ({
   const isTrainee = currentUser.role === 'TRAINEE';
   const isAdmin = currentUser.role === 'ADMIN';
 
-  // Checar em tempo real se há uma nova versão lançada no GitHub Open-Source
+  const [currentVersion, setCurrentVersion] = useState<string>('v1.0.4');
+
+  // Checar em tempo real a versão ativa da API e novidades no GitHub Open-Source
   useEffect(() => {
-    const checkGitHubRelease = async () => {
+    const checkVersionAndReleases = async () => {
+      let activeVer = 'v1.0.4';
+      try {
+        const vRes = await fetch('/api/version');
+        if (vRes.ok) {
+          const vData = await vRes.json();
+          if (vData.version) {
+            activeVer = vData.version;
+            setCurrentVersion(vData.version);
+          }
+        }
+      } catch (e) {}
+
       try {
         const res = await fetch('https://api.github.com/repos/joaomarcosls/SupportHub/releases/latest');
         if (res.ok) {
           const data = await res.json();
-          if (data.tag_name && data.tag_name !== CURRENT_VERSION) {
+          if (data.tag_name && data.tag_name !== activeVer) {
             setHasNewRelease(true);
             setLatestVersion(data.tag_name);
             if (data.html_url) setReleaseUrl(data.html_url);
           }
         }
-      } catch (e) {
-        // Silencioso se estiver offline ou sem internet
-      }
+      } catch (e) {}
     };
-    checkGitHubRelease();
+    checkVersionAndReleases();
   }, []);
 
   const [isUpdatingSystem, setIsUpdatingSystem] = useState(false);
@@ -163,9 +175,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                       ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 animate-pulse'
                       : 'bg-blue-500/20 text-blue-300 border-blue-500/30 hover:bg-blue-500/30 hover:text-white'
                   }`}
-                  title={hasNewRelease ? `Nova versão ${latestVersion} disponível no GitHub!` : 'Versão v1.0.2 - Ver releases no GitHub'}
+                  title={hasNewRelease ? `Nova versão ${latestVersion} disponível no GitHub!` : `Versão ${currentVersion} - Ver releases no GitHub`}
                 >
-                  <span>v1.0.2</span>
+                  <span>{currentVersion}</span>
                   {hasNewRelease ? (
                     <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping inline-block" />
                   ) : (

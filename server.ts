@@ -358,6 +358,17 @@ async function initDatabase() {
 // REST API ENDPOINTS (/api/*) PERSISTIDOS E SEGUROS
 // =============================================================================
 
+// --- Informações de Versão do Sistema ---
+app.get("/api/version", (req, res) => {
+  res.json({
+    version: "v1.0.4",
+    rawVersion: "1.0.4",
+    name: "SupportHub",
+    repository: "https://github.com/joaomarcosls/SupportHub",
+    releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
+  });
+});
+
 // --- Auth & Session ---
 app.get("/api/auth/me", async (req, res) => {
   try {
