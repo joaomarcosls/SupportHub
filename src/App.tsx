@@ -545,7 +545,11 @@ export function App() {
         fetchData();
       } else {
         const err = await res.json().catch(() => ({}));
-        showToast(err.error || "Erro ao remover categoria.", 'error');
+        let errMsg = err.error || "Erro ao remover categoria.";
+        if (err.details && Array.isArray(err.details) && err.details.length > 0) {
+          errMsg += ` Vínculos ativos: ${err.details.join(", ")}`;
+        }
+        showToast(errMsg, 'error');
       }
     } catch (err: any) {
       showToast("Erro de conexão ao remover categoria.", 'error');

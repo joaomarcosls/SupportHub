@@ -367,8 +367,8 @@ async function initDatabase() {
 // --- Informações de Versão do Sistema ---
 app.get("/api/version", (req, res) => {
   res.json({
-    version: "v1.1.0",
-    rawVersion: "1.1.0",
+    version: "v1.1.2",
+    rawVersion: "1.1.2",
     name: "SupportHub",
     repository: "https://github.com/joaomarcosls/SupportHub",
     releasesUrl: "https://github.com/joaomarcosls/SupportHub/releases"
@@ -962,14 +962,58 @@ app.delete("/api/categories/:id", async (req, res) => {
     }
 
     // Prevenir exclusão da própria categoria padrão 'Outros'
-    if (id === outrosId || catName.toLowerCase() === 'outros') {
-      return res.status(400).json({ error: "A categoria padrão 'Outros' não pode ser excluída pois é usada como reserva do sistema." });
+    if (catName.toLowerCase() === 'outros') {
+      return res.status(400).json({ error: "A categoria padrão 'Outros' não pode ser excluída pois é de uso reservado do sistema." });
     }
 
-    // Reatribuir links, modelos e artigos antes da exclusão
-    await query("UPDATE sistemas_links SET category = 'Outros' WHERE category = $1", [catName]);
-    await query("UPDATE canned_responses SET category_id = $1 WHERE category_id::text = $2", [outrosId, id]);
-    await query("UPDATE kb_articles SET category_id = $1 WHERE category_id::text = $2", [outrosId, id]);
+    // Verificar se existem links de sistemas vinculados a esta categoria
+    const linksRes = await query(
+      `SELECT sl.name AS "linkName", c.name AS "cityName" 
+       FROM sistemas_links sl 
+       JOIN cidades c ON sl.city_id = c.id 
+       WHERE sl.category = $1`,
+      [catName]
+    );
+
+    // Verificar se existem modelos de resposta vinculados
+    const responsesRes = await query(
+      `SELECT title FROM canned_responses WHERE category_id::text = $1`,
+      [id]
+    );
+
+    // Verificar se existem artigos na base de conhecimento vinculados
+    const articlesRes = await query(
+      `SELECT title FROM knowledge_articles WHERE category_id::text = $1`,
+      [id]
+    );
+
+    const hasLinks = linksRes.rows.length > 0;
+    const hasResponses = responsesRes.rows.length > 0;
+    const hasArticles = articlesRes.rows.length > 0;
+
+    if (hasLinks || hasResponses || hasArticles) {
+      const detailsList: string[] = [];
+      if (hasLinks) {
+        linksRes.rows.forEach(r => {
+          detailsList.push(`Link "${r.linkName}" na Cidade "${r.cityName}"`);
+        });
+      }
+      if (hasResponses) {
+        responsesRes.rows.forEach(r => {
+          detailsList.push(`Modelo "${r.title}"`);
+        });
+      }
+      if (hasArticles) {
+        articlesRes.rows.forEach(r => {
+          detailsList.push(`Artigo "${r.title}"`);
+        });
+      }
+
+      return res.status(400).json({
+        error: `Não é possível excluir a categoria '${catName}' porque ela possui vínculos ativos.`,
+        details: detailsList
+      });
+    }
 
     // Excluir a categoria
     await query("DELETE FROM categories WHERE id::text = $1", [id]);
