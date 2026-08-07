@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MainTab, UserRole, User, SystemStats } from '../types';
 import { 
   Building2,
@@ -14,8 +14,13 @@ import {
   History,
   User as UserIcon,
   KeyRound,
-  ChevronDown
+  ChevronDown,
+  ExternalLink,
+  Sparkles,
+  Download
 } from 'lucide-react';
+
+const CURRENT_VERSION = 'v1.0.2';
 
 interface NavbarProps {
   activeTab: MainTab;
@@ -39,11 +44,58 @@ export const Navbar: React.FC<NavbarProps> = ({
   setSearchQuery
 }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [hasNewRelease, setHasNewRelease] = useState(false);
+  const [latestVersion, setLatestVersion] = useState<string>('v1.0.2');
+  const [releaseUrl, setReleaseUrl] = useState<string>('https://github.com/joaomarcosls/SupportHub/releases');
+  const [isUpdateBannerOpen, setIsUpdateBannerOpen] = useState(false);
+
   const isTrainee = currentUser.role === 'TRAINEE';
   const isAdmin = currentUser.role === 'ADMIN';
 
+  // Checar em tempo real se há uma nova versão lançada no GitHub Open-Source
+  useEffect(() => {
+    const checkGitHubRelease = async () => {
+      try {
+        const res = await fetch('https://api.github.com/repos/joaomarcosls/SupportHub/releases/latest');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.tag_name && data.tag_name !== CURRENT_VERSION) {
+            setHasNewRelease(true);
+            setLatestVersion(data.tag_name);
+            if (data.html_url) setReleaseUrl(data.html_url);
+          }
+        }
+      } catch (e) {
+        // Silencioso se estiver offline ou sem internet
+      }
+    };
+    checkGitHubRelease();
+  }, []);
+
   return (
-    <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 text-slate-100 shadow-lg">
+    <>
+      {/* Banner de Notificação de Nova Versão do GitHub */}
+      {hasNewRelease && (
+        <div className="bg-gradient-to-r from-amber-600 via-amber-500 to-yellow-500 text-slate-950 px-4 py-1.5 text-xs font-bold flex items-center justify-between shadow-md">
+          <div className="flex items-center gap-2 max-w-7xl mx-auto w-full justify-between">
+            <span className="flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-slate-950 fill-current animate-bounce" />
+              <span>Nova versão <strong>{latestVersion}</strong> do SupportHub disponível no GitHub!</span>
+            </span>
+            <a
+              href={releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 bg-slate-950 hover:bg-slate-900 text-white px-2.5 py-0.5 rounded text-[11px] font-bold shadow transition-all border border-amber-400/40"
+            >
+              <span>Ver Release & Baixar</span>
+              <Download className="w-3 h-3" />
+            </a>
+          </div>
+        </div>
+      )}
+
+      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 text-slate-100 shadow-lg">
       {/* Main Header Navigation */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 gap-4">
@@ -56,9 +108,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold text-lg tracking-tight text-slate-100">SupportHub</span>
-                <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 bg-blue-500/20 text-blue-300 rounded border border-blue-500/30">
-                  v1.0
-                </span>
+                <a
+                  href="https://github.com/joaomarcosls/SupportHub/releases"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded border transition-all flex items-center gap-1 group/version ${
+                    hasNewRelease
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30 animate-pulse'
+                      : 'bg-blue-500/20 text-blue-300 border-blue-500/30 hover:bg-blue-500/30 hover:text-white'
+                  }`}
+                  title={hasNewRelease ? `Nova versão ${latestVersion} disponível no GitHub!` : 'Versão v1.0.2 - Ver releases no GitHub'}
+                >
+                  <span>v1.0.2</span>
+                  {hasNewRelease ? (
+                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping inline-block" />
+                  ) : (
+                    <ExternalLink className="w-2.5 h-2.5 opacity-60 group-hover/version:opacity-100" />
+                  )}
+                </a>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">Utilitário de Produtividade para Suporte Técnico</p>
             </div>
@@ -270,5 +338,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       </div>
     </header>
+  </>
   );
 };
